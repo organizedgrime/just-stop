@@ -1,11 +1,16 @@
+use std::io::Read;
+
 use iced::time::{self, Duration, Instant};
 
 use iced::widget::image::Handle;
-use iced::widget::{button, column, image, pick_list, scrollable, text, vertical_space};
+use iced::widget::{button, column, image, pick_list, row, scrollable, text, vertical_space};
 use iced::{application, Center, Element, Fill, Subscription};
 use nokhwa::pixel_format::RgbFormat;
-use nokhwa::utils::{CameraIndex, CameraInfo, RequestedFormat, RequestedFormatType};
-use nokhwa::{native_api_backend, query, Camera, FormatDecoder};
+use nokhwa::utils::{
+    yuyv422_predicted_size, CameraFormat, CameraIndex, CameraInfo, RequestedFormat,
+    RequestedFormatType, Resolution,
+};
+use nokhwa::{native_api_backend, query, CallbackCamera, Camera, FormatDecoder};
 
 pub fn main() -> iced::Result {
     application("Just Stop", JustStop::update, JustStop::view)
@@ -18,8 +23,9 @@ struct JustStop {
     available_devices: Vec<String>,
     available_indices: Vec<CameraIndex>,
     selected_device: Option<String>,
-    camera: Option<Camera>,
-    frame_buffer: Option<nokhwa::Buffer>,
+    camera: Option<CallbackCamera>,
+    handle: Option<Handle>,
+    buffer: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,15 +41,28 @@ impl JustStop {
         match message {
             CaptureFrame => {
                 if let Some(camera) = &mut self.camera {
-                    if camera.is_stream_open() {
-                        self.frame_buffer = camera.frame().ok();
+                    println!("i want another frame!");
+                    if camera.is_stream_open().unwrap() {
+                        if let Ok(buffer) = camera.poll_frame() {
+                            // self.buffer
+                            //     .resize(yuyv422_predicted_size(buffer.buffer().len(), true), 0);
+                            self.handle = Some(Handle::from_bytes(buffer.buffer_bytes()));
+                            // buffer
+                            //     .decode_image_to_buffer::<RgbFormat>(&mut self.buffer)
+                            //     .unwrap();
+                            // self.handle = Some(Handle::from_rgba(
+                            //     buffer.resolution().width(),
+                            //     buffer.resolution().height(),
+                            //     self.buffer.clone(),
+                            // ));
+                        }
                     }
                 }
             }
             DeviceSelected(device_name) => {
                 // Close the stream if it's still open
                 if let Some(camera) = &mut self.camera {
-                    if camera.is_stream_open() {
+                    if camera.is_stream_open().unwrap() {
                         camera.stop_stream().unwrap();
                     }
                 }
@@ -59,8 +78,22 @@ impl JustStop {
                     RequestedFormatType::AbsoluteHighestFrameRate,
                 );
 
-                self.camera =
-                    Some(Camera::new(self.available_indices[index].clone(), requested).unwrap());
+                self.camera = Some(
+                    CallbackCamera::new(
+                        self.available_indices[index].clone(),
+                        requested,
+                        |buffer| {
+                            // buffer
+                            //     .clone()
+                            //     .decode_image_to_buffer::<RgbFormat>(&mut self.image_data)
+                            //     .unwrap();
+                        },
+                    )
+                    .unwrap(),
+                );
+
+                // self.camera =
+                //     Some(Camera::new(self.available_indices[index].clone(), requested).unwrap());
 
                 // Open the stream
                 if let Some(camera) = &mut self.camera {
@@ -85,30 +118,36 @@ impl JustStop {
         .placeholder("Choose a language...");
 
         let refresh_button = button(text("refresh list")).on_press(Message::RefreshDeviceList);
-        let bytes = if let Some(fb) = &self.frame_buffer {
-            fb.buffer().to_vec()
-        } else {
-            vec![]
-        };
 
-        let content = column![
-            vertical_space().height(600),
-            "Select a camera",
-            pick_list,
-            refresh_button,
-            image(Handle::from_bytes(bytes)),
-            vertical_space().height(600),
-        ]
-        .width(Fill)
-        .align_x(Center)
-        .spacing(10);
+        //let c = if let Some(fb) = &self.frame_buffer.map(nokhwa::Buffer::buffer) {
+        // if let Some(fb) = self.frame_buffer {
+        //     let img = fb.decode_image().unwrap();
+        // }
+        let c = if let Some(fb) = self.handle.as_ref() {
+            println!("yippee!");
+            row![image(fb)]
+        } else {
+            row![]
+        };
+        // let bytes = if let Some(fb) = &self.frame_buffer {
+        //         if fb.buffer()
+        // } else {
+        //     &[]
+        // };
+
+        let content = column!["Select a camera", pick_list, refresh_button, c]
+            .width(Fill)
+            .align_x(Center)
+            .spacing(10);
 
         scrollable(content).into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.camera.is_some() {
-            time::every(Duration::from_millis(10)).map(|_| Message::CaptureFrame)
+        if let Some(camera) = &self.camera {
+            let millis = (1000.0 / camera.frame_rate().unwrap() as f32) as u64;
+            println!("waiting {millis}ms to request another frame");
+            time::every(Duration::from_millis(millis)).map(|_| Message::CaptureFrame)
         } else {
             Subscription::none()
         }

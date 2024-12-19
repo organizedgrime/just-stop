@@ -2389,6 +2389,7 @@ dependencies = [
  "nokhwa-bindings-macos",
  "nokhwa-bindings-windows",
  "nokhwa-core",
+ "parking_lot 0.12.3",
  "paste",
  "thiserror 2.0.7",
  "wgpu 23.0.1",
