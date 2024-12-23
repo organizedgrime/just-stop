@@ -1,16 +1,13 @@
-use std::io::Read;
-
-use iced::time::{self, Duration, Instant};
-
+mod camera_feed;
+use ::image::RgbaImage;
+use iced::time::{self, Duration};
 use iced::widget::image::Handle;
-use iced::widget::{button, column, image, pick_list, row, scrollable, text, vertical_space};
+use iced::widget::{button, column, image, pick_list, row, scrollable, text};
 use iced::{application, Center, Element, Fill, Subscription};
-use nokhwa::pixel_format::RgbFormat;
-use nokhwa::utils::{
-    yuyv422_predicted_size, CameraFormat, CameraIndex, CameraInfo, RequestedFormat,
-    RequestedFormatType, Resolution,
-};
-use nokhwa::{native_api_backend, query, CallbackCamera, Camera, FormatDecoder};
+use nokhwa::pixel_format::{RgbAFormat, RgbFormat};
+use nokhwa::utils::{CameraIndex, CameraInfo, RequestedFormat, RequestedFormatType};
+use nokhwa::{native_api_backend, query, CallbackCamera, Camera};
+use std::sync::{Arc, Mutex};
 
 pub fn main() -> iced::Result {
     application("Just Stop", JustStop::update, JustStop::view)
@@ -23,9 +20,6 @@ struct JustStop {
     available_devices: Vec<String>,
     available_indices: Vec<CameraIndex>,
     selected_device: Option<String>,
-    camera: Option<CallbackCamera>,
-    handle: Option<Handle>,
-    buffer: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,24 +34,24 @@ impl JustStop {
         use Message::*;
         match message {
             CaptureFrame => {
-                if let Some(camera) = &mut self.camera {
-                    println!("i want another frame!");
-                    if camera.is_stream_open().unwrap() {
-                        if let Ok(buffer) = camera.poll_frame() {
-                            // self.buffer
-                            //     .resize(yuyv422_predicted_size(buffer.buffer().len(), true), 0);
-                            self.handle = Some(Handle::from_bytes(buffer.buffer_bytes()));
-                            // buffer
-                            //     .decode_image_to_buffer::<RgbFormat>(&mut self.buffer)
-                            //     .unwrap();
-                            // self.handle = Some(Handle::from_rgba(
-                            //     buffer.resolution().width(),
-                            //     buffer.resolution().height(),
-                            //     self.buffer.clone(),
-                            // ));
-                        }
-                    }
-                }
+                // if let Some(camera) = &mut self.camera {
+                //     println!("i want another frame!");
+                //     if camera.is_stream_open().unwrap() {
+                //         if let Ok(buffer) = camera.poll_frame() {
+                //             // self.buffer
+                //             //     .resize(yuyv422_predicted_size(buffer.buffer().len(), true), 0);
+                //             self.handle = Some(Handle::from_bytes(buffer.buffer_bytes()));
+                //             // buffer
+                //             //     .decode_image_to_buffer::<RgbFormat>(&mut self.buffer)
+                //             //     .unwrap();
+                //             // self.handle = Some(Handle::from_rgba(
+                //             //     buffer.resolution().width(),
+                //             //     buffer.resolution().height(),
+                //             //     self.buffer.clone(),
+                //             // ));
+                //         }
+                //     }
+                // }
             }
             DeviceSelected(device_name) => {
                 // Close the stream if it's still open
@@ -119,21 +113,12 @@ impl JustStop {
 
         let refresh_button = button(text("refresh list")).on_press(Message::RefreshDeviceList);
 
-        //let c = if let Some(fb) = &self.frame_buffer.map(nokhwa::Buffer::buffer) {
-        // if let Some(fb) = self.frame_buffer {
-        //     let img = fb.decode_image().unwrap();
-        // }
         let c = if let Some(fb) = self.handle.as_ref() {
             println!("yippee!");
             row![image(fb)]
         } else {
             row![]
         };
-        // let bytes = if let Some(fb) = &self.frame_buffer {
-        //         if fb.buffer()
-        // } else {
-        //     &[]
-        // };
 
         let content = column!["Select a camera", pick_list, refresh_button, c]
             .width(Fill)

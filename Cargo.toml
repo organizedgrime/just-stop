@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.13.1", features = ["image", "tokio"] }
+iced = { version = "0.13.1", features = ["image", "tokio", "debug"] }
+image = "0.25.5"
 nokhwa = { version = "0.10.7", features = [
 	"input-native",
 	"output-wgpu",
 	"output-threaded",
 ] }
+tokio = "1.42.0"
