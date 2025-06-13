@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 
-# export PREVIEWER_PID=$$
-echo "$$" >"/tmp/just_stop_previewer.pid" # Backup method
+# Setup tmp files
+source tmp.sh
+
+# Write this PID to file
+write_tmp $$ host.pid
 
 # Record
 export WEBCAM_DEV="/dev/video0"
@@ -32,6 +35,7 @@ echo "resolution: $RESOLUTION"
 # Set up signal handlers
 source overlay.sh
 
+# Listen for USR1 signals
 source capture_photo.sh
 trap capture_photo USR1
 
