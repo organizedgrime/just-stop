@@ -7,6 +7,7 @@ WEBCAM_DEV="/dev/video0"
 VIRTUAL_DEV="/dev/video2"
 FFMPEG_PID=""
 INOTIFY_PID=""
+latest_image=""
 
 for arg in "$@"; do
   case $arg in
@@ -49,6 +50,7 @@ start_overlay() {
   [[ -n "$FFMPEG_PID" ]] && kill -TERM -$FFMPEG_PID 2>/dev/null
 
   if [[ -n "$img" ]]; then
+    latest_image="$img" # Track current image for restart
     # Build common ffmpeg command (using smooth preview settings)
     local ffmpeg_cmd=(
       ffmpeg "${PREVIEW_ARGS_ARRAY[@]}"
@@ -74,10 +76,26 @@ capture_photo() {
   local filepath="$WATCH_DIR/$filename"
 
   echo "📸 $filename"
-  ffmpeg "${CAPTURE_ARGS_ARRAY[@]}" -frames:v 1 -y "$filepath" -loglevel error 2>/dev/null
 
-  if [[ $? -eq 0 ]]; then
+  # Temporarily pause preview to free up camera
+  local temp_ffmpeg_pid="$FFMPEG_PID"
+  if [[ -n "$FFMPEG_PID" ]]; then
+    kill -TERM -$FFMPEG_PID 2>/dev/null
+    sleep 0.5
+  fi
+
+  # Capture frame
+  ffmpeg "${CAPTURE_ARGS_ARRAY[@]}" -frames:v 1 -y "$filepath" -loglevel error
+  local capture_result=$?
+
+  # Restart preview if we had one
+  if [[ -n "$temp_ffmpeg_pid" && -n "$latest_image" ]]; then
+    start_overlay "$latest_image"
+  fi
+
+  if [[ $capture_result -eq 0 ]]; then
     ((CAPTURE_COUNTER++))
+    echo "✅ Saved: $filename"
   else
     echo "❌ Capture failed"
   fi
