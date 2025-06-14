@@ -7,30 +7,40 @@ source tmp.sh
 write_tmp $$ host.pid
 
 # Record
-export WEBCAM_DEV="/dev/video0"
-export VIRTUAL_DEV="/dev/video2"
-export WINDOW_TITLE="Onion"
-export PREFIX="frame"
+# export WEBCAM_DEV="/dev/video0"
+# export VIRTUAL_DEV="/dev/video2"
 
-export VIRTUAL_MODE=0
-export WATCH_DIR=""
+write_tmp 0 camera.virtual
+write_tmp 0 frames.count
+write_tmp "/dev/video0" camera.device
+write_tmp "frame" frames.prefix
+write_tmp "1920x1080" camera.resolution
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-  --virtual) export VIRTUAL_MODE=1 ;;
-  *) export WATCH_DIR=$1 ;;
+  --virtual) write_tmp 1 camera.virtual ;;
+  *) write_tmp $1 frames.dir ;;
   esac
   shift
 done
 
-if [[ -z "$WATCH_DIR" ]]; then
+frames_dir=$(read_tmp frames.dir)
+if [[ -z $frames_dir ]]; then
   echo "Usage: $0 [--virtual] <watch_directory>"
   exit 1
+else
+  echo "frames.dir: $frames_dir"
+  echo "camera.device: $(read_tmp camera.device)"
+  echo "camera.virtual: $(read_tmp camera.virtual)"
 fi
 
 # Get camera settings (dual setup for smooth preview + quality capture)
 source get_formats.sh
-echo "resolution: $RESOLUTION"
+get_formats
+
+# Sets up pause and resume handlers
+source killer.sh
+trap cleanup EXIT INT TERM
 
 # Set up signal handlers
 source overlay.sh
@@ -39,33 +49,37 @@ source overlay.sh
 source capture_photo.sh
 trap capture_photo USR1
 
-source cleanup.sh
-trap cleanup EXIT INT TERM
-
 # Start with latest existing image
-export PREVIOUS_IMG=$(ls "$WATCH_DIR"/"$PREFIX"_*.jpg 2>/dev/null | tail -1)
-export PREVIOUS_COUNT=$(basename "$PREVIOUS_IMG" | grep -o '[0-9]\+')
+prefix=$(read_tmp frames.prefix)
+previous=$(ls "$frames_dir"/"$prefix"_*.bmp 2>/dev/null | tail -1)
+count=$(basename "$previous" | grep -o '[0-9]\+')
+if [[ -n "$count" ]]; then
+  echo "Image tally is at $count."
+  write_tmp $count frames.count
+fi
 
 echo "Stop motion setup ready."
-[[ -n "$PREVIOUS_COUNT" ]] && echo "Image tally is at $PREVIOUS_COUNT."
 echo "📸 Use './capture.sh' to take photos"
 
 # Start by overlaying the previous image
-[[ -n "$PREVIOUS_IMG" ]] && overlay "$PREVIOUS_IMG"
-[[ -z "$PREVIOUS_IMG" ]] && overlay
+if [[ -n "$previous" ]]; then
+  overlay "$previous"
+else
+  overlay
+fi
+
+echo "started overlay, moving on to inotifywait"
 
 # Monitor for new images
-inotifywait -m -e create,modify,moved_to "$WATCH_DIR" --format '%w%f' 2>/dev/null | while read file; do
+inotifywait -m -e create,modify,moved_to "$frames_dir" --format '%w%f' 2>/dev/null | while read file; do
   echo "noticed new file: $file"
-  [[ "$file" =~ \.(jpg|jpeg|png)$ ]] && overlay "$file"
+  [[ "$file" =~ \.bmp$ ]] && overlay "$file"
+  echo "tried to restart overlay"
 done &
-export INOTIFY_PID=$!
+write_tmp $! inotify.pid
+echo "inotify pid $(read_tmp inotify.pid)"
 
-# Monitor ffmpeg and exit when preview closes
+# # Monitor ffmpeg and exit when preview closes
 while true; do
-  if [[ -n "$PREVIOUS_IMG" ]] && ! pgrep -f "ffmpeg.*$WEBCAM_DEV" >/dev/null; then
-    echo "Preview closed - exiting"
-    exit 0
-  fi
   sleep 1
 done

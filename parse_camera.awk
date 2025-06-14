@@ -41,5 +41,5 @@
 }
 
 END {
-    print "-f v4l2 -input_format " best_format " -video_size " best_resolution " -framerate " best_fps " -i " device
+    print "-input_format " best_format " -video_size " best_resolution " -framerate " best_fps " -i " device
 }
