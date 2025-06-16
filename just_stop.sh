@@ -1,11 +1,71 @@
 #!/bin/bash
 set -uo pipefail
 
-PHOTO_DIR="$1"
-WEBCAM="/dev/video0"
-VIRTUAL_CAM="/dev/video2"
 LOCKFILE="/tmp/just_stop.lock"
 TRIGGER_FILE="/tmp/just_stop.trigger"
+
+# real devices
+devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
+# virtual devices
+virtual_devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=1))
+
+if [[ ${#devices[@]} -eq 0 ]]; then
+  echo "There are no webcams available"
+  exit 1
+fi
+
+if [[ ${#virtual_devices[@]} -eq 0 ]]; then
+  echo "There are no virtual cameras available"
+  exit 1
+fi
+
+VIRTUAL_CAM="${virtual_devices[0]}"
+WEBCAM="${devices[0]}"
+
+while getopts ":v:w:g:" o; do
+  case $o in
+  w)
+    [[ $OPTARG =~ ^[0-9]+$ ]] || {
+      echo "Error: -$o requires a number" >&2
+      exit 1
+    }
+    selected_wcam="/dev/video$OPTARG"
+    if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
+      echo "$selected_wcam is a valid webcam"
+      WEBCAM=$selected_wcam
+    else
+      echo "$selected_wcam isn't a valid webcam."
+      echo -e "\nValid webcams: ${devices[@]}"
+      exit 1
+    fi
+    ;;
+  v | w)
+    [[ $OPTARG =~ ^[0-9]+$ ]] || {
+      echo "Error: -$o requires a number" >&2
+      exit 1
+    }
+    selected_vcam="/dev/video$OPTARG"
+    if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
+      echo "$selected_vcam is a virtual device"
+      VIRTUAL_CAM=$selected_vcam
+    else
+      echo "$selected_wcam isn't a valid virtual device."
+      echo -e "\nValid virtual devices: ${virtual_devices[@]}"
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Usage: $0 [-w source webcam number] [-v output virtualcam number] [-c num]" >&2
+    exit 1
+    ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# Now that the vars have been shifted
+PHOTO_DIR="$1"
+
+echo "Using webcam $WEBCAM and virtual output $VIRTUAL_CAM"
 
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
@@ -74,7 +134,7 @@ preview() {
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$WEBCAM" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[0:v]hflip,vflip[flipped];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[flipped][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -filter_complex "[0:v]hflip,vflip[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
     -f v4l2 "$VIRTUAL_CAM" 2>/dev/null & #-filter_complex "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[0:v][overlay]overlay=0:0:format=auto,format=yuv420p" \
 
   FFMPEG_PID=$!
