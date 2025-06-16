@@ -55,7 +55,7 @@ capture() {
 
   # Capture photo with error handling
   if ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i "$WEBCAM" \
-    -frames:v 1 -y "$new_photo" 2>/dev/null; then
+    -vf "hflip,vflip" -frames:v 1 -y "$new_photo" 2>/dev/null; then
     echo "Captured: $new_photo"
   else
     echo "Failed to capture photo, continuing..."
@@ -74,8 +74,8 @@ preview() {
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$WEBCAM" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[0:v][overlay]overlay=0:0:format=auto,format=yuv420p" \
-    -f v4l2 "$VIRTUAL_CAM" 2>/dev/null &
+    -filter_complex "[0:v]hflip,vflip[flipped];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[flipped][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -f v4l2 "$VIRTUAL_CAM" 2>/dev/null & #-filter_complex "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[0:v][overlay]overlay=0:0:format=auto,format=yuv420p" \
 
   FFMPEG_PID=$!
 
