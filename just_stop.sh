@@ -278,15 +278,7 @@ preview() {
   FFMPEG_PID=$!
 
   # Check if process actually started
-  sleep 0.5
-  if kill -0 "$FFMPEG_PID" 2>/dev/null; then
-    echo "Started virtual webcam with PID $FFMPEG_PID"
-  else
-    echo "Failed to start preview, retrying in 2 seconds..."
-    FFMPEG_PID=""
-    sleep 2
-    preview
-  fi
+  echo "Started virtual webcam with PID $FFMPEG_PID"
 }
 
 # Create placeholder image if no photos exist
