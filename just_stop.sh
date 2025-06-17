@@ -222,8 +222,8 @@ capture() {
   fi
 
   # Capture photo with error handling
-  if ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i "$device_w" \
-    -vf "hflip,vflip" -frames:v 1 -y "$new_photo" 2>/dev/null; then
+  if ffmpeg -f v4l2 -input_format yuyv422 -video_size 1920x1080 -i "$device_w" \
+    -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$new_photo" 2>/dev/null; then
     echo "Captured: $new_photo"
   else
     echo "Failed to capture photo, continuing..."
