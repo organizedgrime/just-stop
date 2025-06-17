@@ -26,8 +26,20 @@ columns=0
 color="0xFF0000"
 direction=
 grid_opacity="0.5"
+prefix="photo"
 
-while getopts ":v:w:r:c:d:C:A:" o; do
+usage() {
+  echo "Usage: $0 [-w webcam] [-v virtualcam] [-r rows] [-c cols] [-d h|v|b] [-C 0xRRGGBB] [-A opacity] [DIRECTORY]" >&2
+  echo "Use -h for help" >&2
+  exit 1
+}
+
+# If no options were specified at all, just print usage
+if [[ ! -v 1 ]]; then
+  usage
+fi
+
+while getopts ":v:w:r:c:d:p:C:A:h" o; do
   case $o in
   w | v | r | c)
     if [[ ! $OPTARG =~ ^[0-9]+$ ]]; then
@@ -49,7 +61,7 @@ while getopts ":v:w:r:c:d:C:A:" o; do
   v)
     selected_vcam="/dev/video$OPTARG"
     if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
-      echo "$selected_vcam is a virtual device"
+      echo "$selected_vcam is a valid virtual device"
       VIRTUAL_CAM=$selected_vcam
     else
       echo "$selected_wcam isn't a valid virtual device." >&2
@@ -90,15 +102,52 @@ while getopts ":v:w:r:c:d:C:A:" o; do
       grid_opacity="0.$OPTARG"
     fi
     ;;
+  p)
+    if [[ ! $OPTARG =~ ^[a-z]+$ ]]; then
+      echo "Error: -$o must be lowercase alphabetical" >&2
+      exit 1
+    fi
+    prefix=$OPTARG
+    ;;
+  h)
+    cat <<EOF
+Usage: $0 [OPTIONS] [DIRECTORY]
+
+Video devices:
+  -w <N>            Source webcam number (default: ${devices[0]##*/video})
+  -v <N>            Virtual camera number (default: ${virtual_devices[0]##*/video})
+
+Video effects:
+  -d <h|v|b>        Direction: flip video feed horizontal, vertical, both
+
+Grid:
+  -r <0-100>        Rows (default: $rows)
+  -c <0-100>        Columns (default: $columns)
+  -C <0xRRGGBB>     Color (default: $color)
+  -A <0-100>        Opacity % (default: $(echo "$grid_opacity * 100" | bc | cut -d. -f1))
+
+File options:
+  -p <S>            Prefix (default: $prefix)
+
+Examples:
+  $0 -w 0 -v 2 -r 16 -c 9 -d b -C 0x0000FF ~/Pictures
+  $0 -r 5 -A 75 ~/Pictures/screenshots/
+EOF
+    exit 0
+    ;;
   *)
-    echo "Usage: $0 [-w source webcam number] [-v output virtualcam number] [-r grid rows] [-c grid columns] [-d {h|v|b}]" >&2
-    exit 1
+    usage
     ;;
   esac
 done
 shift $((OPTIND - 1))
 
 # Now that the vars have been shifted
+if [[ ! -v 1 ]]; then
+  echo "Error: Directory was not specified" >&2
+  exit 1
+fi
+
 PHOTO_DIR="$1"
 
 echo "Using webcam $WEBCAM and virtual output $VIRTUAL_CAM"
@@ -134,7 +183,7 @@ handle_capture() {
 
 capture() {
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
-  local new_photo="$PHOTO_DIR/photo_$timestamp.bmp"
+  local new_photo="$PHOTO_DIR/${prefix}_$timestamp.bmp"
 
   echo "Capturing photo..."
 
