@@ -87,28 +87,6 @@ PHOTO_DIR="$1"
 
 echo "Using webcam $WEBCAM and virtual output $VIRTUAL_CAM"
 
-if [[ -n "$rows" || -n "$columns" ]]; then
-  : ${rows:=0}
-  : ${columns:=0}
-  echo "Overlay grid will have $rows rows and $columns columns"
-else
-  echo "Overlay grid will NOT have $rows rows and $columns columns"
-fi
-
-if [[ -n "$direction" ]]; then
-  case $direction in
-  h)
-    echo "Video will be flipped horizontally."
-    ;;
-  v)
-    echo "Video will be flipped vertically."
-    ;;
-  b)
-    echo "Video will be flipped both vertically and horizontally."
-    ;;
-  esac
-fi
-
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
 
@@ -173,10 +151,37 @@ preview() {
     sort -nr | head -1 | cut -d' ' -f2-)
   [[ -n "$latest" ]] && ln -sf "$latest" "$PHOTO_DIR/latest.bmp"
 
+  local webcam_filter=""
+
+  if [[ -n "$direction" ]]; then
+    case $direction in
+    h)
+      echo "Video will be flipped horizontally."
+      webcam_filter+="hflip"
+      ;;
+    v)
+      echo "Video will be flipped vertically."
+      webcam_filter+="vflip"
+      ;;
+    b)
+      echo "Video will be flipped both vertically and horizontally."
+      webcam_filter+="hflip,vflip"
+      ;;
+    esac
+  fi
+
+  # Set to null if no settings were applied
+  : ${webcam_filter:="null"}
+  echo "this is the filter: $webcam_filter"
+
+  if [[ $rows -gt 0 || $columns -gt 0 ]]; then
+    echo "Overlay grid will have $rows rows and $columns columns"
+  fi
+
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$WEBCAM" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[0:v]hflip,vflip[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
     -f v4l2 "$VIRTUAL_CAM" 2>/dev/null & #-filter_complex "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[0:v][overlay]overlay=0:0:format=auto,format=yuv420p" \
 
   FFMPEG_PID=$!
