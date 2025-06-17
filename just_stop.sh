@@ -278,23 +278,30 @@ preview() {
 
   local filters=()
 
-  if [[ $advanced ]]; then
+  local format_yuyv="format=yuv420p"
+  local main_fmt="scale=1920x1080,${format_yuyv}"
+  local thumb_fmt="scale=960x540,${format_yuyv}"
+  local webcam_filter="${direction_filter},${grid_filter}"
+  local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
+
+  # If we're in advanced mode
+  if [[ $advanced = true ]]; then
     filters=(
       "[0:v]split=2[webcam][webcam_thumb]"
       "[1:v]split=2[latest][latest_thumb]"
-      "[webcam_thumb]scale=960x540,format=yuv420p,${direction_filter}[webcam_thumb_filtered]"
-      "[latest]scale=1920x1080,format=yuv420p[overlay]"
-      "[latest_thumb]scale=960x540,format=yuv420p[latest_thumb_scaled]"
-      "[webcam]scale=1920x1080,format=yuv420p,${direction_filter},${grid_filter}[webcam_filtered]"
-      "[webcam_filtered][overlay]blend=all_mode=normal:all_opacity=${effect_o}[standard]"
+      "[webcam_thumb]${thumb_fmt},${direction_filter}[webcam_thumb_filtered]"
+      "[latest]${main_fmt}[overlay]"
+      "[latest_thumb]${thumb_fmt}[latest_thumb_scaled]"
+      "[webcam]${main_fmt},${webcam_filter}[webcam_filtered]"
+      "[webcam_filtered][overlay]${onion_filter}[standard]"
       "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
       "[left_stack][standard]hstack=inputs=2[output]"
     )
   else
     filters=(
-      "[0:v]scale=1920x1080,format=yuv420p,${direction_filter},${grid_filter}[webcam]"
-      "[1:v]scale=1920x1080,format=yuv420p[latest]"
-      "[webcam][latest]blend=all_mode=normal:all_opacity=${effect_o}[output]"
+      "[0:v]${main_fmt},${webcam_filter}[webcam]"
+      "[1:v]${main_fmt}[latest]"
+      "[webcam][latest]${onion_filter}[output]"
     )
   fi
 
@@ -308,7 +315,7 @@ preview() {
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
     -filter_complex $filter_complex -map "[output]" \
-    -f v4l2 "$device_v" & #2>/dev/null &
+    -f v4l2 "$device_v" 2>/dev/null &
 
   FFMPEG_PID=$!
 
