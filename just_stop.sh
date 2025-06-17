@@ -240,50 +240,56 @@ preview() {
   [[ -n "$latest" ]] && ln -sf "$latest" "$PHOTO_DIR/latest.bmp"
 
   #
-  local webcam_filter=""
+  local direction_filter=
   if [[ -n "$effect_d" ]]; then
     case $effect_d in
     h)
       echo "Video will be flipped horizontally."
-      webcam_filter+="hflip"
+      direction_filter+="hflip"
       ;;
     v)
       echo "Video will be flipped vertically."
-      webcam_filter+="vflip"
+      direction_filter+="vflip"
       ;;
     b)
       echo "Video will be flipped both vertically and horizontally."
-      webcam_filter+="hflip,vflip"
+      direction_filter+="hflip,vflip"
       ;;
     esac
   fi
-  # Set to null if no settings were applied
-  : ${webcam_filter:="null"}
 
+  local grid_filter=
   if [[ $grid_r -gt 0 || $grid_c -gt 0 ]]; then
-    if [[ -n webcam_filter ]]; then
-      webcam_filter+=","
-    fi
-    webcam_filter+="drawgrid=w=iw/$grid_c:h=ih/$grid_r:t=4:c=$grid_C@$grid_g"
+    grid_filter="drawgrid=w=iw/$grid_c:h=ih/$grid_r:t=4:c=$grid_C@$grid_g"
     echo "Overlay grid will have $grid_r rows and $grid_c columns"
   fi
 
+  # Set to null if no settings were applied
+  : ${direction_filter:="null"}
+  : ${grid_filter:="null"}
+
   local filters=(
-    "[0:v]$webcam_filter[webcam]"
-    "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${effect_o}[overlay]"
-    "[webcam][overlay]overlay=0:0:format=auto,format=yuv420p"
+    "[0:v]split=2[webcam][webcam_thumb]"
+    "[1:v]split=2[latest][latest_thumb]"
+    "[webcam_thumb]scale=960x540,format=yuv420p,$direction_filter[webcam_thumb_filtered]"
+    "[latest]scale=1920x1080,format=yuv420p[overlay]"
+    "[latest_thumb]scale=960x540,format=yuv420p[latest_thumb_scaled]"
+    "[webcam]scale=1920x1080,format=yuv420p,$direction_filter,$grid_filter[webcam_filtered]"
+    "[webcam_filtered][overlay]blend=all_mode=normal:all_opacity=0.5[main]"
+    "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
+    "[left_stack][main]hstack=inputs=2[output]"
   )
+
+  # Join filters into single string
   local filter_complex=$(
     IFS=\;
     echo "${filters[*]}"
   )
 
-  echo "this is the filter: $filter_complex"
-
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex $filter_complex \
+    -filter_complex $filter_complex -map "[output]" \
     -f v4l2 "$device_v" 2>/dev/null &
 
   FFMPEG_PID=$!
