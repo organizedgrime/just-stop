@@ -25,6 +25,7 @@ rows=0
 columns=0
 color="0xFF0000"
 direction=
+onion="0.25"
 grid_opacity="0.5"
 prefix="photo"
 
@@ -39,9 +40,9 @@ if [[ ! -v 1 ]]; then
   usage
 fi
 
-while getopts ":v:w:r:c:d:p:C:A:h" o; do
+while getopts ":v:w:r:c:d:o:p:C:A:h" o; do
   case $o in
-  w | v | r | c)
+  w | v | r | c | o)
     if [[ ! $OPTARG =~ ^[0-9]+$ ]]; then
       echo "Error: -$o requires a number" >&2
       exit 1
@@ -69,7 +70,7 @@ while getopts ":v:w:r:c:d:p:C:A:h" o; do
       exit 1
     fi
     ;;
-  r | c | A)
+  r | c | A | o)
     if [[ $OPTARG -lt 0 || $OPTARG -gt 100 ]]; then
       echo "Error: -$o must be >0 and <100" >&2
       exit 1
@@ -87,6 +88,13 @@ while getopts ":v:w:r:c:d:p:C:A:h" o; do
       exit 1
     fi
     direction=$OPTARG
+    ;;
+  o)
+    if [[ $OPTARG -eq 100 ]]; then
+      onion="1.0"
+    else
+      onion="0.$OPTARG"
+    fi
     ;;
   C)
     if [[ ! $OPTARG =~ ^0x(([0-9]|[A-F]){2}){3}$ ]]; then
@@ -249,8 +257,8 @@ preview() {
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$WEBCAM" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
-    -f v4l2 "$VIRTUAL_CAM" 2>/dev/null & #-filter_complex "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=0.5[overlay];[0:v][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${onion}[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -f v4l2 "$VIRTUAL_CAM" 2>/dev/null &
 
   FFMPEG_PID=$!
 
