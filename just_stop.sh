@@ -19,18 +19,30 @@ if [[ ${#virtual_devices[@]} -eq 0 ]]; then
   exit 1
 fi
 
-VIRTUAL_CAM="${virtual_devices[0]}"
-WEBCAM="${devices[0]}"
-rows=0
-columns=0
-color="0xFF0000"
-direction=
-onion="0.25"
-grid_opacity="0.5"
-prefix="photo"
+# Virtual device
+device_v="${virtual_devices[0]}"
+# Webcam device
+device_w="${devices[0]}"
+
+# Grid rows
+grid_r=0
+# Grid columns
+grid_c=0
+# Grid opacity
+grid_g="0.5"
+# Grid color
+grid_C="0xFF0000"
+
+# Video flip direction
+effect_d=
+# Onion opacity
+effect_o="0.25"
+
+# File save prefix
+file_p="photo"
 
 usage() {
-  echo "Usage: $0 [-w webcam] [-v virtualcam] [-r rows] [-c cols] [-d h|v|b] [-C 0xRRGGBB] [-A opacity] [DIRECTORY]" >&2
+  echo "Usage: $0 [-w webcam] [-v virtualcam] [-d h|v|b] [-o onion opacity] [-r rows] [-c cols] [-g grid opacity] [-C 0xRRGGBB] [-p prefix] [DIRECTORY]" >&2
   echo "Use -h for help" >&2
   exit 1
 }
@@ -40,8 +52,21 @@ if [[ ! -v 1 ]]; then
   usage
 fi
 
-while getopts ":v:w:r:c:d:o:p:C:A:h" o; do
+while getopts ":v:w:r:c:d:g:o:p:C:h" o; do
+  opt_prefix=
   case $o in
+  w | v)
+    opt_prefix="device"
+    ;;&
+  r | c | g | C)
+    opt_prefix="grid"
+    ;;&
+  p)
+    opt_prefix="file"
+    ;;&
+  d | o)
+    opt_prefix="effect"
+    ;;&
   w | v | r | c | o)
     if [[ ! $OPTARG =~ ^[0-9]+$ ]]; then
       echo "Error: -$o requires a number" >&2
@@ -52,70 +77,59 @@ while getopts ":v:w:r:c:d:o:p:C:A:h" o; do
     selected_wcam="/dev/video$OPTARG"
     if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
       echo "$selected_wcam is a valid webcam"
-      WEBCAM=$selected_wcam
+      declare OPTARG=$selected_wcam
     else
       echo "$selected_wcam isn't a valid webcam." >&2
       echo -e "\nValid webcams: ${devices[@]}"
       exit 1
     fi
-    ;;
+    ;;&
   v)
     selected_vcam="/dev/video$OPTARG"
     if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
       echo "$selected_vcam is a valid virtual device"
-      VIRTUAL_CAM=$selected_vcam
+      declare OPTARG=$selected_vcam
     else
       echo "$selected_wcam isn't a valid virtual device." >&2
       echo -e "\nValid virtual devices: ${virtual_devices[@]}"
       exit 1
     fi
-    ;;
-  r | c | A | o)
+    ;;&
+  # Zero to one hundred values
+  r | c | g | o)
     if [[ $OPTARG -lt 0 || $OPTARG -gt 100 ]]; then
       echo "Error: -$o must be >0 and <100" >&2
       exit 1
     fi
     ;;&
-  r)
-    rows=$OPTARG
-    ;;
-  c)
-    columns=$OPTARG
-    ;;
+  # Direction
   d)
     if [[ ! $OPTARG =~ ^h|v|b$ ]]; then
       echo "Error: -$o must either be h, v, or b" >&2
       exit 1
     fi
-    direction=$OPTARG
-    ;;
-  o)
-    if [[ $OPTARG -eq 100 ]]; then
-      onion="1.0"
-    else
-      onion="0.$OPTARG"
-    fi
-    ;;
+    ;;&
+  # Colors
   C)
     if [[ ! $OPTARG =~ ^0x(([0-9]|[A-F]){2}){3}$ ]]; then
       echo "Error: -$o must be a hexadecimal value in the form 0xRRGGBB" >&2
       exit 1
     fi
-    color=$OPTARG
-    ;;
-  A)
-    if [[ $OPTARG -eq 100 ]]; then
-      grid_opacity="1.0"
-    else
-      grid_opacity="0.$OPTARG"
-    fi
-    ;;
+    ;;&
+  # Percentages
+  g | o)
+    declare OPTARG=$(echo "scale=2; $OPTARG / 100" | bc)
+    ;;&
+  # Prefix
   p)
     if [[ ! $OPTARG =~ ^[a-z]+$ ]]; then
       echo "Error: -$o must be lowercase alphabetical" >&2
       exit 1
     fi
-    prefix=$OPTARG
+    ;;&
+  # Set variable
+  v | w | r | c | d | o | p | g | C)
+    declare "${opt_prefix}_${o}=$OPTARG"
     ;;
   h)
     cat <<EOF
@@ -127,19 +141,20 @@ Video devices:
 
 Video effects:
   -d <h|v|b>        Direction: flip video feed horizontal, vertical, both
+  -o <0-100>        Onion skin opacity % (default: $(echo "$effect_o * 100" | bc | cut -d. -f1))
 
 Grid:
-  -r <0-100>        Rows (default: $rows)
-  -c <0-100>        Columns (default: $columns)
-  -C <0xRRGGBB>     Color (default: $color)
-  -A <0-100>        Opacity % (default: $(echo "$grid_opacity * 100" | bc | cut -d. -f1))
+  -r <0-100>        Rows (default: $grid_r)
+  -c <0-100>        Columns (default: $grid_c)
+  -g <0-100>        Grid opacity % (default: $(echo "$grid_g * 100" | bc | cut -d. -f1))
+  -C <0xRRGGBB>     Color (default: $grid_C)
 
 File options:
-  -p <S>            Prefix (default: $prefix)
+  -p <S>            Prefix (default: $file_p)
 
 Examples:
   $0 -w 0 -v 2 -r 16 -c 9 -d b -C 0x0000FF ~/Pictures
-  $0 -r 5 -A 75 ~/Pictures/screenshots/
+  $0 -r 5 -g 75 ~/Pictures/screenshots/
 EOF
     exit 0
     ;;
@@ -158,7 +173,7 @@ fi
 
 PHOTO_DIR="$1"
 
-echo "Using webcam $WEBCAM and virtual output $VIRTUAL_CAM"
+echo "Using webcam $device_w and virtual output $device_v"
 
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
@@ -191,7 +206,7 @@ handle_capture() {
 
 capture() {
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
-  local new_photo="$PHOTO_DIR/${prefix}_$timestamp.bmp"
+  local new_photo="$PHOTO_DIR/${file_p}_$timestamp.bmp"
 
   echo "Capturing photo..."
 
@@ -207,7 +222,7 @@ capture() {
   fi
 
   # Capture photo with error handling
-  if ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i "$WEBCAM" \
+  if ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -i "$device_w" \
     -vf "hflip,vflip" -frames:v 1 -y "$new_photo" 2>/dev/null; then
     echo "Captured: $new_photo"
   else
@@ -226,8 +241,8 @@ preview() {
 
   #
   local webcam_filter=""
-  if [[ -n "$direction" ]]; then
-    case $direction in
+  if [[ -n "$effect_d" ]]; then
+    case $effect_d in
     h)
       echo "Video will be flipped horizontally."
       webcam_filter+="hflip"
@@ -244,21 +259,21 @@ preview() {
   fi
   # Set to null if no settings were applied
   : ${webcam_filter:="null"}
-  echo "this is the filter: $webcam_filter"
 
-  if [[ $rows -gt 0 || $columns -gt 0 ]]; then
+  if [[ $grid_r -gt 0 || $grid_c -gt 0 ]]; then
     if [[ -n webcam_filter ]]; then
       webcam_filter+=","
     fi
-    webcam_filter+="drawgrid=w=iw/$columns:h=ih/$rows:t=4:c=$color@$grid_opacity"
-    echo "Overlay grid will have $rows rows and $columns columns"
+    webcam_filter+="drawgrid=w=iw/$grid_c:h=ih/$grid_r:t=4:c=$grid_C@$grid_g"
+    echo "Overlay grid will have $grid_r rows and $grid_c columns"
   fi
 
+  echo "this is the filter: $webcam_filter"
   # Start virtual camera with overlay
-  ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$WEBCAM" \
+  ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${onion}[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
-    -f v4l2 "$VIRTUAL_CAM" 2>/dev/null &
+    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${effect_o}[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -f v4l2 "$device_v" 2>/dev/null &
 
   FFMPEG_PID=$!
 
