@@ -41,8 +41,11 @@ effect_o="0.25"
 # File save prefix
 file_p="photo"
 
+# Advanced mode includes a vstack of previous frame and current feed
+advanced=false
+
 usage() {
-  echo "Usage: $0 [-w webcam] [-v virtualcam] [-d h|v|b] [-o onion opacity] [-r rows] [-c cols] [-g grid opacity] [-C 0xRRGGBB] [-p prefix] [DIRECTORY]" >&2
+  echo "Usage: $0 [-w webcam] [-v virtualcam] [-d h|v|b] [-o opacity] [-r rows] [-c cols] [-g opacity] [-C 0xRRGGBB] [-p prefix] [-a] [DIRECTORY]" >&2
   echo "Use -h for help" >&2
   exit 1
 }
@@ -52,7 +55,7 @@ if [[ ! -v 1 ]]; then
   usage
 fi
 
-while getopts ":v:w:r:c:d:g:o:p:C:h" o; do
+while getopts ":v:w:r:c:d:g:o:p:C:ah" o; do
   opt_prefix=
   case $o in
   w | v)
@@ -131,6 +134,10 @@ while getopts ":v:w:r:c:d:g:o:p:C:h" o; do
   v | w | r | c | d | o | p | g | C)
     declare "${opt_prefix}_${o}=$OPTARG"
     ;;
+  # Advanced mode
+  a)
+    advanced=true
+    ;;
   h)
     cat <<EOF
 Usage: $0 [OPTIONS] [DIRECTORY]
@@ -149,11 +156,12 @@ Grid:
   -g <0-100>        Grid opacity % (default: $(echo "$grid_g * 100" | bc | cut -d. -f1))
   -C <0xRRGGBB>     Color (default: $grid_C)
 
-File options:
-  -p <S>            Prefix (default: $file_p)
+Script options:
+  -p <S>            File prefix (default: $file_p)
+  -a                Turn on advanced mode
 
 Examples:
-  $0 -w 0 -v 2 -r 16 -c 9 -d b -C 0x0000FF ~/Pictures
+  $0 -w 0 -v 2 -r 16 -c 9 -a -d b -C 0x0000FF ~/Pictures
   $0 -r 5 -g 75 ~/Pictures/screenshots/
 EOF
     exit 0
@@ -268,17 +276,27 @@ preview() {
   : ${direction_filter:="null"}
   : ${grid_filter:="null"}
 
-  local filters=(
-    "[0:v]split=2[webcam][webcam_thumb]"
-    "[1:v]split=2[latest][latest_thumb]"
-    "[webcam_thumb]scale=960x540,format=yuv420p,$direction_filter[webcam_thumb_filtered]"
-    "[latest]scale=1920x1080,format=yuv420p[overlay]"
-    "[latest_thumb]scale=960x540,format=yuv420p[latest_thumb_scaled]"
-    "[webcam]scale=1920x1080,format=yuv420p,$direction_filter,$grid_filter[webcam_filtered]"
-    "[webcam_filtered][overlay]blend=all_mode=normal:all_opacity=0.5[main]"
-    "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
-    "[left_stack][main]hstack=inputs=2[output]"
-  )
+  local filters=()
+
+  if [[ $advanced ]]; then
+    filters=(
+      "[0:v]split=2[webcam][webcam_thumb]"
+      "[1:v]split=2[latest][latest_thumb]"
+      "[webcam_thumb]scale=960x540,format=yuv420p,${direction_filter}[webcam_thumb_filtered]"
+      "[latest]scale=1920x1080,format=yuv420p[overlay]"
+      "[latest_thumb]scale=960x540,format=yuv420p[latest_thumb_scaled]"
+      "[webcam]scale=1920x1080,format=yuv420p,${direction_filter},${grid_filter}[webcam_filtered]"
+      "[webcam_filtered][overlay]blend=all_mode=normal:all_opacity=${effect_o}[standard]"
+      "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
+      "[left_stack][standard]hstack=inputs=2[output]"
+    )
+  else
+    filters=(
+      "[0:v]scale=1920x1080,format=yuv420p,${direction_filter},${grid_filter}[webcam]"
+      "[1:v]scale=1920x1080,format=yuv420p[latest]"
+      "[webcam][latest]blend=all_mode=normal:all_opacity=${effect_o}[output]"
+    )
+  fi
 
   # Join filters into single string
   local filter_complex=$(
@@ -290,7 +308,7 @@ preview() {
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
     -filter_complex $filter_complex -map "[output]" \
-    -f v4l2 "$device_v" 2>/dev/null &
+    -f v4l2 "$device_v" & #2>/dev/null &
 
   FFMPEG_PID=$!
 
