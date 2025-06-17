@@ -268,11 +268,22 @@ preview() {
     echo "Overlay grid will have $grid_r rows and $grid_c columns"
   fi
 
-  echo "this is the filter: $webcam_filter"
+  local filters=(
+    "[0:v]$webcam_filter[webcam]"
+    "[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${effect_o}[overlay]"
+    "[webcam][overlay]overlay=0:0:format=auto,format=yuv420p"
+  )
+  local filter_complex=$(
+    IFS=\;
+    echo "${filters[*]}"
+  )
+
+  echo "this is the filter: $filter_complex"
+
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
-    -filter_complex "[0:v]$webcam_filter[webcam];[1:v]scale=1920x1080,format=yuva420p,colorchannelmixer=aa=${effect_o}[overlay];[webcam][overlay]overlay=0:0:format=auto,format=yuv420p" \
+    -filter_complex $filter_complex \
     -f v4l2 "$device_v" 2>/dev/null &
 
   FFMPEG_PID=$!
