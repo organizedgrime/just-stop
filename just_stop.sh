@@ -40,6 +40,8 @@ effect_o="0.25"
 
 # File save prefix
 file_p="photo"
+# File count
+file_c=0
 
 # Advanced mode includes a vstack of previous frame and current feed
 advanced=false
@@ -214,7 +216,7 @@ handle_capture() {
 
 capture() {
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
-  local new_photo="$PHOTO_DIR/${file_p}_$timestamp.bmp"
+  local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
 
   echo "Capturing photo..."
 
@@ -242,9 +244,12 @@ capture() {
 }
 
 preview() {
-  # Create/update symlink to latest photo
-  local latest=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null |
-    sort -nr | head -1 | cut -d' ' -f2-)
+  # Store all matching files with timestamps
+  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
+  # Count the number of matching files
+  file_c=$(echo "$file_list" | grep -c '^' 2>/dev/null || echo "0")
+  # Get the latest file path
+  local latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
   [[ -n "$latest" ]] && ln -sf "$latest" "$PHOTO_DIR/latest.bmp"
 
   #
@@ -283,6 +288,7 @@ preview() {
   local thumb_fmt="scale=960x540,${format_yuyv}"
   local webcam_filter="${direction_filter},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
+  local text_filter="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
 
   # If we're in advanced mode
   if [[ $advanced = true ]]; then
@@ -293,15 +299,17 @@ preview() {
       "[latest]${main_fmt}[overlay]"
       "[latest_thumb]${thumb_fmt}[latest_thumb_scaled]"
       "[webcam]${main_fmt},${webcam_filter}[webcam_filtered]"
-      "[webcam_filtered][overlay]${onion_filter}[standard]"
+      "[webcam_filtered][overlay]${onion_filter}[mux]"
       "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
-      "[left_stack][standard]hstack=inputs=2[output]"
+      "[mux]${text_filter}[main]"
+      "[left_stack][main]hstack=inputs=2[output]"
     )
   else
     filters=(
       "[0:v]${main_fmt},${webcam_filter}[webcam]"
       "[1:v]${main_fmt}[latest]"
-      "[webcam][latest]${onion_filter}[output]"
+      "[webcam][latest]${onion_filter}[mux]"
+      "[mux]${text_filter}[output]"
     )
   fi
 
@@ -315,7 +323,8 @@ preview() {
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i "$PHOTO_DIR/latest.bmp" \
     -filter_complex $filter_complex -map "[output]" \
-    -f v4l2 "$device_v" 2>/dev/null &
+    -f v4l2 "$device_v" &
+  #2>/dev/null &
 
   FFMPEG_PID=$!
 
