@@ -21,41 +21,61 @@ fi
 
 VIRTUAL_CAM="${virtual_devices[0]}"
 WEBCAM="${devices[0]}"
+rows=0
+columns=0
+direction=
 
-while getopts ":v:w:g:" o; do
+while getopts ":v:w:r:c:d:C:" o; do
   case $o in
-  w)
-    [[ $OPTARG =~ ^[0-9]+$ ]] || {
+  w | v | r | c)
+    if [[ ! $OPTARG =~ ^[0-9]+$ ]]; then
       echo "Error: -$o requires a number" >&2
       exit 1
-    }
+    fi
+    ;;&
+  w)
     selected_wcam="/dev/video$OPTARG"
     if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
       echo "$selected_wcam is a valid webcam"
       WEBCAM=$selected_wcam
     else
-      echo "$selected_wcam isn't a valid webcam."
+      echo "$selected_wcam isn't a valid webcam." >&2
       echo -e "\nValid webcams: ${devices[@]}"
       exit 1
     fi
     ;;
-  v | w)
-    [[ $OPTARG =~ ^[0-9]+$ ]] || {
-      echo "Error: -$o requires a number" >&2
-      exit 1
-    }
+  v)
     selected_vcam="/dev/video$OPTARG"
     if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
       echo "$selected_vcam is a virtual device"
       VIRTUAL_CAM=$selected_vcam
     else
-      echo "$selected_wcam isn't a valid virtual device."
+      echo "$selected_wcam isn't a valid virtual device." >&2
       echo -e "\nValid virtual devices: ${virtual_devices[@]}"
       exit 1
     fi
     ;;
+  r | c)
+    if [[ $OPTARG -lt 0 || $OPTARG -gt 100 ]]; then
+      echo "Error: -$o must be >0 and <100" >&2
+      exit 1
+    fi
+    ;;&
+  r)
+    rows=$OPTARG
+    ;;
+  c)
+    columns=$OPTARG
+    ;;
+  d)
+    if [[ ! $OPTARG =~ ^h|v|b$ ]]; then
+      echo "Error: -$o must either be h, v, or b" >&2
+      exit 1
+    fi
+    direction=$OPTARG
+    ;;
   *)
-    echo "Usage: $0 [-w source webcam number] [-v output virtualcam number] [-c num]" >&2
+    echo "Usage: $0 [-w source webcam number] [-v output virtualcam number] [-r grid rows] [-c grid columns] [-d {h|v|b}]" >&2
     exit 1
     ;;
   esac
@@ -66,6 +86,28 @@ shift $((OPTIND - 1))
 PHOTO_DIR="$1"
 
 echo "Using webcam $WEBCAM and virtual output $VIRTUAL_CAM"
+
+if [[ -n "$rows" || -n "$columns" ]]; then
+  : ${rows:=0}
+  : ${columns:=0}
+  echo "Overlay grid will have $rows rows and $columns columns"
+else
+  echo "Overlay grid will NOT have $rows rows and $columns columns"
+fi
+
+if [[ -n "$direction" ]]; then
+  case $direction in
+  h)
+    echo "Video will be flipped horizontally."
+    ;;
+  v)
+    echo "Video will be flipped vertically."
+    ;;
+  b)
+    echo "Video will be flipped both vertically and horizontally."
+    ;;
+  esac
+fi
 
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
