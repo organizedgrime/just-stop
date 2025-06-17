@@ -23,9 +23,11 @@ VIRTUAL_CAM="${virtual_devices[0]}"
 WEBCAM="${devices[0]}"
 rows=0
 columns=0
+color="0xFF0000"
 direction=
+grid_opacity="0.5"
 
-while getopts ":v:w:r:c:d:C:" o; do
+while getopts ":v:w:r:c:d:C:A:" o; do
   case $o in
   w | v | r | c)
     if [[ ! $OPTARG =~ ^[0-9]+$ ]]; then
@@ -55,7 +57,7 @@ while getopts ":v:w:r:c:d:C:" o; do
       exit 1
     fi
     ;;
-  r | c)
+  r | c | A)
     if [[ $OPTARG -lt 0 || $OPTARG -gt 100 ]]; then
       echo "Error: -$o must be >0 and <100" >&2
       exit 1
@@ -73,6 +75,20 @@ while getopts ":v:w:r:c:d:C:" o; do
       exit 1
     fi
     direction=$OPTARG
+    ;;
+  C)
+    if [[ ! $OPTARG =~ ^0x(([0-9]|[A-F]){2}){3}$ ]]; then
+      echo "Error: -$o must be a hexadecimal value in the form 0xRRGGBB" >&2
+      exit 1
+    fi
+    color=$OPTARG
+    ;;
+  A)
+    if [[ $OPTARG -eq 100 ]]; then
+      grid_opacity="1.0"
+    else
+      grid_opacity="0.$OPTARG"
+    fi
     ;;
   *)
     echo "Usage: $0 [-w source webcam number] [-v output virtualcam number] [-r grid rows] [-c grid columns] [-d {h|v|b}]" >&2
@@ -151,8 +167,8 @@ preview() {
     sort -nr | head -1 | cut -d' ' -f2-)
   [[ -n "$latest" ]] && ln -sf "$latest" "$PHOTO_DIR/latest.bmp"
 
+  #
   local webcam_filter=""
-
   if [[ -n "$direction" ]]; then
     case $direction in
     h)
@@ -169,12 +185,15 @@ preview() {
       ;;
     esac
   fi
-
   # Set to null if no settings were applied
   : ${webcam_filter:="null"}
   echo "this is the filter: $webcam_filter"
 
   if [[ $rows -gt 0 || $columns -gt 0 ]]; then
+    if [[ -n webcam_filter ]]; then
+      webcam_filter+=","
+    fi
+    webcam_filter+="drawgrid=w=iw/$columns:h=ih/$rows:t=4:c=$color@$grid_opacity"
     echo "Overlay grid will have $rows rows and $columns columns"
   fi
 
