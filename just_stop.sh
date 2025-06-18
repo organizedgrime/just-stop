@@ -1,8 +1,9 @@
 #!/bin/bash
 set -uo pipefail
 
-LOCKFILE="/tmp/just_stop.lock"
-TRIGGER_FILE="/tmp/just_stop.trigger"
+TMPDIR="/tmp/just_stop"
+TRIGGER_CAPTURE="/tmp/just_stop/capture.trigger"
+TRIGGER_DELETION="/tmp/just_stop/delete.trigger"
 
 # real devices
 devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
@@ -42,6 +43,7 @@ effect_o="0.25"
 file_p="photo"
 # File count
 file_c=0
+latest=""
 
 # Advanced mode includes a vstack of previous frame and current feed
 advanced=false
@@ -182,14 +184,21 @@ if [[ ! -v 1 ]]; then
 fi
 
 PHOTO_DIR="$1"
+SYMLINK="$PHOTO_DIR/latest.bmp"
 
 echo "Using webcam $device_w and virtual output $device_v"
 
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
 
+# If the dir is still there but this is the only process
+if [[ -d $TMPDIR && $(pgrep -c "just_stop.sh") -eq 1 ]]; then
+  echo "Previous instance failed to clean up properly. Removing tmp files."
+  rm -rf $TMPDIR
+fi
+
 # Exclusive instance lock using directory
-if ! mkdir "$LOCKFILE" 2>/dev/null; then
+if ! mkdir "$TMPDIR" 2>/dev/null; then
   echo "Another instance is already running"
   exit 1
 fi
@@ -204,22 +213,11 @@ cleanup() {
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     wait "$FFMPEG_PID" 2>/dev/null || true
   fi
-  rm -f "$TRIGGER_FILE"
-  rmdir "$LOCKFILE" 2>/dev/null || true
+  rm -rf $TMPDIR 2>/dev/null
   exit 0
 }
 
-# Signal handler for photo capture
-handle_capture() {
-  CAPTURE_REQUESTED=1
-}
-
-capture() {
-  local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
-  local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
-
-  echo "Capturing photo..."
-
+kill_stream() {
   # Stop streaming
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
     # Send interrupt signal to ffpmeg
@@ -228,9 +226,45 @@ capture() {
     while kill -0 "$FFMPEG_PID" 2>/dev/null; do
       sleep 0.1
     done
-    FFMPEG_PID=""
+    FMPEG_PID=""
   fi
+}
 
+link_latest() {
+  # Store all matching files with timestamps
+  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
+  # Count the number of matching files
+  file_c=$(echo "$file_list" | grep -c '^' 2>/dev/null || echo "0")
+  # Get the latest file path
+  latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
+  echo "latest is $latest"
+  [[ -n "$latest" ]] && ln -sf "$latest" $SYMLINK
+}
+
+delete() {
+  kill_stream
+
+  local latest_referant=$(ls -l latest.bmp | awk '/->/ {print $NF }')
+  echo "Deleting $latest_referant"
+  rm $latest_referant
+
+  link_latest
+
+  echo "Restarting preview..."
+  preview
+}
+
+
+handle_capture() {
+  CAPTURE_REQUESTED=1
+}
+
+capture() {
+  kill_stream
+
+  local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
+  local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
+  echo "Capturing photo..."
   # Capture photo with error handling
   if ffmpeg -f v4l2 -input_format yuyv422 -video_size 1920x1080 -i "$device_w" \
     -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$new_photo" 2>/dev/null; then
@@ -244,15 +278,8 @@ capture() {
 }
 
 preview() {
-  # Store all matching files with timestamps
-  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
-  # Count the number of matching files
-  file_c=$(echo "$file_list" | grep -c '^' 2>/dev/null || echo "0")
-  # Get the latest file path
-  local latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
-  [[ -n "$latest" ]] && ln -sf "$latest" "$PHOTO_DIR/latest.bmp"
+  link_latest
 
-  #
   local direction_filter=
   if [[ -n "$effect_d" ]]; then
     case $effect_d in
@@ -321,10 +348,11 @@ preview() {
 
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
-    -loop 1 -i "$PHOTO_DIR/latest.bmp" \
+    -loop 1 -i $SYMLINK \
     -filter_complex $filter_complex -map "[output]" \
-    -f v4l2 "$device_v" &
-  #2>/dev/null &
+    -f v4l2 "$device_v"
+  2>/dev/null \
+    1>/dev/null &
 
   FFMPEG_PID=$!
 
@@ -346,9 +374,13 @@ preview
 # Main loop - check for trigger file
 while true; do
   # Handle photo capture requests via trigger file
-  if [[ -f "$TRIGGER_FILE" ]]; then
-    rm -f "$TRIGGER_FILE"
+  if [[ -f "$TRIGGER_CAPTURE" ]]; then
+    rm -f "$TRIGGER_CAPTURE"
     capture
+  # Handle photo capture requests via trigger file
+  if [[ -f "$TRIGGER_DELETION" ]]; then
+    rm -f "$TRIGGER_DELETION"
+    delete
   fi
 
   # Check if ffmpeg is still running, restart if needed
