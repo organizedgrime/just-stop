@@ -1,1 +1,1 @@
-touch /tmp/just_stop.trigger
+touch /tmp/just_stop/capture.trigger
