@@ -244,7 +244,7 @@ link_latest() {
 delete() {
   kill_stream
 
-  local latest_referant=$(ls -l latest.bmp | awk '/->/ {print $NF }')
+  local latest_referant=$(ls -l $SYMLINK | awk '/->/ {print $NF }')
   echo "Deleting $latest_referant"
   rm $latest_referant
 
@@ -252,11 +252,6 @@ delete() {
 
   echo "Restarting preview..."
   preview
-}
-
-
-handle_capture() {
-  CAPTURE_REQUESTED=1
 }
 
 capture() {
@@ -350,9 +345,8 @@ preview() {
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i $SYMLINK \
     -filter_complex $filter_complex -map "[output]" \
-    -f v4l2 "$device_v"
-  2>/dev/null \
-    1>/dev/null &
+    -f v4l2 "$device_v" \
+    2>/dev/null &
 
   FFMPEG_PID=$!
 
@@ -377,8 +371,8 @@ while true; do
   if [[ -f "$TRIGGER_CAPTURE" ]]; then
     rm -f "$TRIGGER_CAPTURE"
     capture
-  # Handle photo capture requests via trigger file
-  if [[ -f "$TRIGGER_DELETION" ]]; then
+    # Handle photo capture requests via trigger file
+  elif [[ -f "$TRIGGER_DELETION" ]]; then
     rm -f "$TRIGGER_DELETION"
     delete
   fi
