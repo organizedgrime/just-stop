@@ -2,8 +2,10 @@
 set -uo pipefail
 
 TMPDIR="/tmp/just_stop"
-TRIGGER_CAPTURE="/tmp/just_stop/capture.trigger"
-TRIGGER_DELETION="/tmp/just_stop/delete.trigger"
+TRIGGER_CAPTURE="$TMPDIR/capture.trigger"
+TRIGGER_DELETION="$TMPDIR/delete.trigger"
+TRIGGER_PLAYBACK="$TMPDIR/playback.trigger"
+PLAYBACK_FILE="$TMPDIR/playback.mp4"
 
 # real devices
 devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
@@ -220,6 +222,7 @@ cleanup() {
 kill_stream() {
   # Stop streaming
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
+    echo "Killing stream..."
     # Send interrupt signal to ffpmeg
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     # Wait for process to finish dying
@@ -227,18 +230,26 @@ kill_stream() {
       sleep 0.1
     done
     FMPEG_PID=""
+    echo "Stream is dead."
   fi
 }
 
 link_latest() {
   # Store all matching files with timestamps
   local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
+  local file_c=$(find "$PHOTO_DIR" -name "*.bmp" -type f | wc -l)
   # Count the number of matching files
-  file_c=$(echo "$file_list" | grep -c '^' 2>/dev/null || echo "0")
-  # Get the latest file path
-  latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
-  echo "latest is $latest"
-  [[ -n "$latest" ]] && ln -sf "$latest" $SYMLINK
+  echo "file_c: ${file_c}"
+  if [[ $file_c = 0 ]]; then
+    echo "There are no pictures yet! Let me fix that"
+    capture
+    link_latest
+  else
+    # Get the latest file path
+    latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
+    echo "latest is $latest"
+    [[ -n "$latest" ]] && ln -sf "$latest" $SYMLINK
+  fi
 }
 
 delete() {
@@ -270,6 +281,36 @@ capture() {
 
   echo "Restarting preview..."
   preview
+}
+
+playback() {
+
+  echo "Forming video..."
+
+  if [[ -f "$PLAYBACK_FILE" ]]; then
+    rm "$PLAYBACK_FILE"
+  fi
+
+  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -c:v libx264 -pix_fmt yuv420p "$PLAYBACK_FILE"
+
+  if [[ $? -eq 0 ]]; then
+    kill_stream
+    sleep 1
+    # ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p -f v4l2 "$device_v" &
+    # ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -f v4l2 -fflags nobuffer "$device_v" &
+    ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p \
+      -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
+      -r 12 -f v4l2 "$device_v" &
+    # ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
+    #   -vf scale=1920:1080 -pix_fmt yuv420p -f v4l2 "$device_v" &
+    FFMPEG_PID=$!
+    sleep 1
+    kill_stream
+    echo "Restarting preview..."
+    preview
+  else
+    echo "Failed to create mp4 from frames"
+  fi
 }
 
 preview() {
@@ -367,14 +408,16 @@ preview
 
 # Main loop - check for trigger file
 while true; do
-  # Handle photo capture requests via trigger file
+  # Handle triggers
   if [[ -f "$TRIGGER_CAPTURE" ]]; then
     rm -f "$TRIGGER_CAPTURE"
     capture
-    # Handle photo capture requests via trigger file
   elif [[ -f "$TRIGGER_DELETION" ]]; then
     rm -f "$TRIGGER_DELETION"
     delete
+  elif [[ -f "$TRIGGER_PLAYBACK" ]]; then
+    rm -f "$TRIGGER_PLAYBACK"
+    playback
   fi
 
   # Check if ffmpeg is still running, restart if needed
