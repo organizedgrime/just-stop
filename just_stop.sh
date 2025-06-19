@@ -219,16 +219,23 @@ cleanup() {
   exit 0
 }
 
-kill_stream() {
+wait_for_pid() {
+  if [[ -n "$1" ]]; then
+    while kill -0 "$1" 2>/dev/null; do
+      sleep 0.1
+    done
+  fi
+}
+
+stop_preview() {
   # Stop streaming
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
     echo "Killing stream..."
     # Send interrupt signal to ffpmeg
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     # Wait for process to finish dying
-    while kill -0 "$FFMPEG_PID" 2>/dev/null; do
-      sleep 0.1
-    done
+    wait_for_pid $FFMPEG_PID
+    # Reset pid
     FMPEG_PID=""
     echo "Stream is dead."
   fi
@@ -253,7 +260,7 @@ link_latest() {
 }
 
 delete() {
-  kill_stream
+  stop_preview
 
   local latest_referant=$(ls -l $SYMLINK | awk '/->/ {print $NF }')
   echo "Deleting $latest_referant"
@@ -266,7 +273,7 @@ delete() {
 }
 
 capture() {
-  kill_stream
+  stop_preview
 
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
   local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
@@ -284,29 +291,28 @@ capture() {
 }
 
 playback() {
-
   echo "Forming video..."
 
+  # Cleanup existing file if its already there
   if [[ -f "$PLAYBACK_FILE" ]]; then
     rm "$PLAYBACK_FILE"
   fi
 
-  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -c:v libx264 -pix_fmt yuv420p "$PLAYBACK_FILE"
+  # Render in 30fps so it gets played back right
+  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
+    -vf "fps=30" -c:v libx264 -pix_fmt yuv420p "$PLAYBACK_FILE" &
+  wait_for_pid $!
 
   if [[ $? -eq 0 ]]; then
-    kill_stream
-    sleep 1
-    # ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p -f v4l2 "$device_v" &
-    # ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -f v4l2 -fflags nobuffer "$device_v" &
+    stop_preview
+
     ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p \
       -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
-      -r 12 -f v4l2 "$device_v" &
-    # ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
-    #   -vf scale=1920:1080 -pix_fmt yuv420p -f v4l2 "$device_v" &
-    FFMPEG_PID=$!
-    sleep 1
-    kill_stream
+      -f v4l2 "$device_v" &
+    wait_for_pid $!
+
     echo "Restarting preview..."
+
     preview
   else
     echo "Failed to create mp4 from frames"
