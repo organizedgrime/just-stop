@@ -6,8 +6,7 @@ TRIGGER_CAPTURE="$TMPDIR/capture.trigger"
 TRIGGER_DELETION="$TMPDIR/delete.trigger"
 TRIGGER_PLAYBACK="$TMPDIR/playback.trigger"
 PLAYBACK_FILE="$TMPDIR/playback.mp4"
-#NOTIFICAION_FILE="$TMPDIR/notification.txt"
-NOTIFICAION_FILE="./notification.txt"
+NOTIFICAION_FILE="$TMPDIR/notification.txt"
 
 # real devices
 devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
@@ -209,7 +208,6 @@ fi
 
 # State management
 FFMPEG_PID=""
-NOTIFICATION=""
 
 # Cleanup function
 cleanup() {
@@ -237,7 +235,7 @@ stop_preview() {
     # Send interrupt signal to ffpmeg
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     # Wait for process to finish dying
-    wait_for_pid $FFMPEG_PID
+    wait_for_pid "$FFMPEG_PID"
     # Reset pid
     FMPEG_PID=""
     echo "Stream is dead."
@@ -258,14 +256,14 @@ link_latest() {
     # Get the latest file path
     latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
     echo "latest is $latest"
-    [[ -n "$latest" ]] && ln -sf "$latest" $SYMLINK
+    [[ -n "$latest" ]] && ln -sf "$latest" "$SYMLINK"
   fi
 }
 
 delete() {
   stop_preview
 
-  local latest_referant=$(ls -l $SYMLINK | awk '/->/ {print $NF }')
+  local latest_referant=$(ls -l "$SYMLINK" | awk '/->/ {print $NF }')
   echo "Deleting $latest_referant"
   rm $latest_referant
 
@@ -301,7 +299,8 @@ playback() {
     rm "$PLAYBACK_FILE"
   fi
 
-  NOTIFICATION="Rendering Video"
+  echo "Rendering Video..." >"$NOTIFICAION_FILE"
+
   # Render in 30fps so it gets played back right
   ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
     -vf "fps=30" -c:v libx264 -pix_fmt yuv420p "$PLAYBACK_FILE" &
@@ -309,7 +308,8 @@ playback() {
 
   if [[ $? -eq 0 ]]; then
     stop_preview
-    NOTIFICATION=""
+    # echo "" >
+    rm "$NOTIFICAION_FILE"
     ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p \
       -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
       -f v4l2 "$device_v" &
@@ -325,6 +325,10 @@ playback() {
 
 preview() {
   link_latest
+
+  if [[ ! -f "$NOTIFICAION_FILE" ]]; then
+    echo "" >"$NOTIFICAION_FILE"
+  fi
 
   local direction_filter=
   if [[ -n "$effect_d" ]]; then
@@ -362,10 +366,7 @@ preview() {
   local webcam_filter="${direction_filter},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
   local file_count="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
-  local notification_filter="null"
-  if [[ -f $NOTIFICAION_FILE ]]; then
-    notification_filter="drawtext=textfile=${NOTIFICAION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
-  fi
+  local notification_filter="drawtext=textfile=${NOTIFICAION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
   local text="${file_count},${notification_filter}"
 
   # If we're in advanced mode
@@ -428,10 +429,14 @@ while true; do
   if [[ -f "$TRIGGER_CAPTURE" ]]; then
     rm -f "$TRIGGER_CAPTURE"
     capture
-  elif [[ -f "$TRIGGER_DELETION" ]]; then
+  fi
+
+  if [[ -f "$TRIGGER_DELETION" ]]; then
     rm -f "$TRIGGER_DELETION"
     delete
-  elif [[ -f "$TRIGGER_PLAYBACK" ]]; then
+  fi
+
+  if [[ -f "$TRIGGER_PLAYBACK" ]]; then
     rm -f "$TRIGGER_PLAYBACK"
     playback
   fi
