@@ -19,7 +19,14 @@ If you want a 30fps preview window, that means your individual frames will be st
 `just_stop` is just stop motion.
 If you want to control your camera settings, use `cameractrls`.
 
+> What do I need
+
+FFMPEG and v4l2loopback. That's about it.
+
 > How do i use it?
 
 Run `just_stop.sh`. You now have a virtual camera.
-Run `capture.sh` or simply `touch /tmp/just_stop.trigger` to capture a photo.
+
+Run `touch /tmp/just_stop/capture.trigger` to capture a frame.
+Run `touch /tmp/just_stop/delete.trigger` to delete the most recent frame.
+Run `touch /tmp/just_stop/playback.trigger` to render all the previously captured frames and play them back before returning to the preview.
