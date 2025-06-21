@@ -6,7 +6,7 @@ TRIGGER_CAPTURE="$TMPDIR/capture.trigger"
 TRIGGER_DELETION="$TMPDIR/delete.trigger"
 TRIGGER_PLAYBACK="$TMPDIR/playback.trigger"
 PLAYBACK_FILE="$TMPDIR/playback.mp4"
-NOTIFICAION_FILE="$TMPDIR/notification.txt"
+NOTIFICATION_FILE="$TMPDIR/notification.txt"
 
 # real devices
 devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
@@ -261,6 +261,7 @@ link_latest() {
 }
 
 delete() {
+  echo "Deleting Photo..." >"$NOTIFICATION_FILE"
   stop_preview
 
   local latest_referant=$(ls -l "$SYMLINK" | awk '/->/ {print $NF }')
@@ -269,11 +270,13 @@ delete() {
 
   link_latest
 
-  echo "Restarting preview..."
+  echo "Restarting preview"
   preview
 }
 
 capture() {
+  echo "Capturing Photo..." >"$NOTIFICATION_FILE"
+
   stop_preview
 
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
@@ -299,7 +302,7 @@ playback() {
     rm "$PLAYBACK_FILE"
   fi
 
-  echo "Rendering Video..." >"$NOTIFICAION_FILE"
+  echo "Rendering Video..." >"$NOTIFICATION_FILE"
 
   # Render in 30fps so it gets played back right
   ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
@@ -308,8 +311,7 @@ playback() {
 
   if [[ $? -eq 0 ]]; then
     stop_preview
-    # echo "" >
-    rm "$NOTIFICAION_FILE"
+    # rm "$NOTIFICATION_FILE"
     ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p \
       -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
       -f v4l2 "$device_v" &
@@ -326,9 +328,9 @@ playback() {
 preview() {
   link_latest
 
-  if [[ ! -f "$NOTIFICAION_FILE" ]]; then
-    echo "" >"$NOTIFICAION_FILE"
-  fi
+  # if [[ ! -f "$NOTIFICATION_FILE" ]]; then
+  echo "" >"$NOTIFICATION_FILE"
+  # fi
 
   local direction_filter=
   if [[ -n "$effect_d" ]]; then
@@ -366,7 +368,7 @@ preview() {
   local webcam_filter="${direction_filter},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
   local file_count="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
-  local notification_filter="drawtext=textfile=${NOTIFICAION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
+  local notification_filter="drawtext=textfile=${NOTIFICATION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
   local text="${file_count},${notification_filter}"
 
   # If we're in advanced mode
