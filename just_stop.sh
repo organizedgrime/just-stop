@@ -8,6 +8,9 @@ TRIGGER_PLAYBACK="$TMPDIR/playback.trigger"
 PLAYBACK_FILE="$TMPDIR/playback.mp4"
 NOTIFICATION_FILE="$TMPDIR/notification.txt"
 
+# FFMPEG needs this arg in complex filters to work
+CAMERA_FORMAT="format=yuv420p"
+
 # real devices
 devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
 # virtual devices
@@ -247,7 +250,7 @@ stop_preview() {
 link_latest() {
   # Store all matching files with timestamps
   local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
-  local file_c=$(find "$PHOTO_DIR" -name "*.bmp" -type f | wc -l)
+  file_c=$(find "$PHOTO_DIR" -name "*.bmp" -type f | wc -l)
   # Count the number of matching files
   echo "file_c: ${file_c}"
   if [[ $file_c = 0 ]]; then
@@ -308,10 +311,8 @@ playback() {
 
   local filters=()
 
-  local format_yuyv="format=yuv420p"
-  local main_fmt="scale=1920x1080,${format_yuyv}"
+  local main_fmt="scale=height=ih:width=iw,${CAMERA_FORMAT}"
   # Render in the webcam's native fps so it gets played back right
-  # ffmpeg -framerate 12 -pattern_type glob -i "./meow*.bmp" -filter_complex "[0:v]fps=60,format=yuv420p[format];[format]pad=width=iw*1.5:height=ih:x=(ow-iw):y=0:color=gray[output]" -map "[output]" -c:v libx264 testbed.mp4
   if [[ $advanced = true ]]; then
     filters=(
       "[0:v]fps=${vcam_fps},${main_fmt}[format]"
@@ -329,23 +330,17 @@ playback() {
     echo "${filters[*]}"
   )
 
-  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" &
+  # Render a preview
+  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" 2>/dev/null &
 
   wait_for_pid $!
 
   if [[ $? -eq 0 ]]; then
     stop_preview
 
-    ffmpeg -re -i "$PLAYBACK_FILE" -f v4l2 "$device_v" &
-    # local thumb_fmt="scale=960x540,${format_yuyv}"
-    # if [[ $advanced = true ]]; then
-    #   ffmpeg -re -i "$PLAYBACK_FILE" -filter_complex "[0:v]${main_fmt}[output]" -map "[output]" -f v4l2 "$device_v" &
-    # else
-    #   # ffmpeg -re -i "$PLAYBACK_FILE" -filter_complex "[0:v]${main_fmt}[output]" -map "[output]" -f v4l2 "$device_v" &
-    # fi
+    ffmpeg -re -i "$PLAYBACK_FILE" -f v4l2 "$device_v" 2>/dev/null &
     wait_for_pid $!
 
-    # -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
     echo "Restarting preview..."
 
     preview
@@ -390,9 +385,8 @@ preview() {
 
   local filters=()
 
-  local format_yuyv="format=yuv420p"
-  local main_fmt="scale=1920x1080,${format_yuyv}"
-  local thumb_fmt="scale=960x540,${format_yuyv}"
+  local main_fmt="${CAMERA_FORMAT}"
+  local thumb_fmt="scale=width=iw/2:height=ih/2,${CAMERA_FORMAT}"
   local webcam_filter="${direction_filter},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
   local file_count="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
@@ -432,10 +426,7 @@ preview() {
   ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i $SYMLINK \
     -filter_complex "$filter_complex" -map "[output]" \
-    -f v4l2 "$device_v" &
-  #\
-  # 2>/dev/null &
-
+    -f v4l2 "$device_v" 2>/dev/null &
   FFMPEG_PID=$!
 
   # Check if process actually started
