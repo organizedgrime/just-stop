@@ -98,6 +98,8 @@ while getopts ":v:w:r:c:d:g:o:p:C:ah" o; do
     selected_vcam="/dev/video$OPTARG"
     if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
       echo "$selected_vcam is a valid virtual device"
+      vcam_fps=$(v4l2-ctl -d2 -P | perl -n -e'/(\d+)\// && print $1')
+      echo "vcam_fps: $vcam_fps"
       declare OPTARG=$selected_vcam
     else
       echo "$selected_wcam isn't a valid virtual device." >&2
@@ -304,19 +306,46 @@ playback() {
 
   echo "Rendering Video..." >"$NOTIFICATION_FILE"
 
-  # Render in 30fps so it gets played back right
-  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" \
-    -vf "fps=30" -c:v libx264 -pix_fmt yuv420p "$PLAYBACK_FILE" &
+  local filters=()
+
+  local format_yuyv="format=yuv420p"
+  local main_fmt="scale=1920x1080,${format_yuyv}"
+  # Render in the webcam's native fps so it gets played back right
+  # ffmpeg -framerate 12 -pattern_type glob -i "./meow*.bmp" -filter_complex "[0:v]fps=60,format=yuv420p[format];[format]pad=width=iw*1.5:height=ih:x=(ow-iw):y=0:color=gray[output]" -map "[output]" -c:v libx264 testbed.mp4
+  if [[ $advanced = true ]]; then
+    filters=(
+      "[0:v]fps=${vcam_fps},${main_fmt}[format]"
+      "[format]pad=width=iw*1.5:height=ih:x=(ow-iw):y=0:color=gray[output]"
+    )
+  else
+    filters=(
+      "[0:v]fps=${vcam_fps},${main_fmt}[output]"
+    )
+  fi
+
+  # Join filters into single string
+  local filter_complex=$(
+    IFS=\;
+    echo "${filters[*]}"
+  )
+
+  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" &
+
   wait_for_pid $!
 
   if [[ $? -eq 0 ]]; then
     stop_preview
-    # rm "$NOTIFICATION_FILE"
-    ffmpeg -re -i "$PLAYBACK_FILE" -vf scale=1920:1080 -pix_fmt yuv420p \
-      -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
-      -f v4l2 "$device_v" &
+
+    ffmpeg -re -i "$PLAYBACK_FILE" -f v4l2 "$device_v" &
+    # local thumb_fmt="scale=960x540,${format_yuyv}"
+    # if [[ $advanced = true ]]; then
+    #   ffmpeg -re -i "$PLAYBACK_FILE" -filter_complex "[0:v]${main_fmt}[output]" -map "[output]" -f v4l2 "$device_v" &
+    # else
+    #   # ffmpeg -re -i "$PLAYBACK_FILE" -filter_complex "[0:v]${main_fmt}[output]" -map "[output]" -f v4l2 "$device_v" &
+    # fi
     wait_for_pid $!
 
+    # -fflags +discardcorrupt -analyzeduration 1 -probesize 32 \
     echo "Restarting preview..."
 
     preview
@@ -328,9 +357,8 @@ playback() {
 preview() {
   link_latest
 
-  # if [[ ! -f "$NOTIFICATION_FILE" ]]; then
+  # Clear the notification before previewing
   echo "" >"$NOTIFICATION_FILE"
-  # fi
 
   local direction_filter=
   if [[ -n "$effect_d" ]]; then
