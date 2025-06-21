@@ -1,5 +1,7 @@
 # Just Stop
 
+![demo](https://github.com/user-attachments/assets/22856278-0534-4d5c-a87a-ca52aefce01d)
+
 `just_stop` is stop motion software for when you've given up.
 
 > I just want to run stop motion software on linux, that should be fine right?
