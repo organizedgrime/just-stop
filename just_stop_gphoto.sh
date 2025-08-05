@@ -230,16 +230,6 @@ wait_for_pid() {
 
 stop_preview() {
   # Stop streaming
-  if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
-    echo "Killing FFMPEG..."
-    # Send interrupt signal to ffpmeg
-    kill -9 "$FFMPEG_PID" 2>/dev/null || true
-    # Wait for process to finish dying
-    wait_for_pid "$FFMPEG_PID"
-    # Reset pid
-    FMPEG_PID=""
-    echo "FFMPEG is dead."
-  fi
   if [[ -n "$GPHOTO_PID" ]] && kill -0 "$GPHOTO_PID" 2>/dev/null; then
     echo "Killing GPHOTO..."
     # Send interrupt signal to ffpmeg
@@ -250,6 +240,18 @@ stop_preview() {
     GPHOTO_PID=""
     echo "GPHOTO is dead."
   fi
+  if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
+    echo "Killing FFMPEG..."
+    # Send interrupt signal to ffpmeg
+    kill -9 "$FFMPEG_PID" 2>/dev/null || true
+    # Wait for process to finish dying
+    wait_for_pid "$FFMPEG_PID"
+    # Reset pid
+    FMPEG_PID=""
+    echo "FFMPEG is dead."
+  fi
+  pkill gphoto2
+  pkill ffmpeg
 }
 
 link_latest() {
@@ -266,7 +268,34 @@ link_latest() {
     # Get the latest file path
     latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
     echo "latest is $latest"
-    [[ -n "$latest" ]] && convert "$latest" -resize 1024x680\! "$SYMLINK"
+    if [[ -n "$latest" ]]; then
+      local tmp_pic="$PHOTO_DIR/tmp.jpeg"
+      local second_tmp_pic="$PHOTO_DIR/tmp2.jpeg"
+      magick "$latest" -resize 1024x680\! "$tmp_pic"
+
+      if [[ -n "$effect_d" ]]; then
+        case $effect_d in
+        h)
+          echo "Capture will be flipped horizontally."
+          magick "$tmp_pic" -flip "$SYMLINK"
+          rm "$tmp_pic"
+          ;;
+        v)
+          echo "Capture will be flipped vertically."
+          magick "$tmp_pic" -flop "$SYMLINK"
+          rm "$tmp_pic"
+          ;;
+        b)
+          echo "Capture will be flipped both vertically and horizontally."
+          direction_filter=("")
+          magick "$tmp_pic" -flip "$second_tmp_pic"
+          magick "$second_tmp_pic" -flop "$SYMLINK"
+          rm "$tmp_pic" "$second_tmp_pic"
+          ;;
+        esac
+      fi
+
+    fi
   fi
 }
 
