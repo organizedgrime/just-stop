@@ -346,7 +346,7 @@ playback() {
 
   local filters=()
 
-  local main_fmt="scale=height=ih:width=iw,${CAMERA_FORMAT}"
+  local main_fmt="scale=width=1024:height=680,${CAMERA_FORMAT}"
   # Render in the webcam's native fps so it gets played back right
   if [[ $advanced = true ]]; then
     filters=(
@@ -369,11 +369,13 @@ playback() {
   ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.jpeg" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" 2>/dev/null &
 
   wait_for_pid $!
+  echo "FINISHED RENDER STARTING PLAYBACK"
 
   if [[ $? -eq 0 ]]; then
     stop_preview
 
-    ffmpeg -re -i "$PLAYBACK_FILE" -f v4l2 "$device_v" 2>/dev/null &
+    ffmpeg -re -i "$PLAYBACK_FILE" -r "$vcam_fps" -pix_fmt yuv420p -f v4l2 "$device_v" &
+
     wait_for_pid $!
 
     echo "Restarting preview..."
@@ -461,7 +463,7 @@ preview() {
     -loop 1 -i $SYMLINK \
     -vcodec rawvideo \
     -filter_complex "$filter_complex" -map "[output]" \
-    -f v4l2 "$device_v" &
+    -f v4l2 "$device_v" 2>/dev/null &
 
   # Check if process actually started
   FFMPEG_PID=$!
