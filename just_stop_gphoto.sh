@@ -175,6 +175,23 @@ EOF
 done
 shift $((OPTIND - 1))
 
+# Add direction filter logic (same as preview)
+DIRECTION_FILTER=
+if [[ -n "$effect_d" ]]; then
+  case $effect_d in
+  h)
+    DIRECTION_FILTER="hflip"
+    ;;
+  v)
+    DIRECTION_FILTER="vflip"
+    ;;
+  b)
+    DIRECTION_FILTER="hflip,vflip"
+    ;;
+  esac
+fi
+: ${DIRECTION_FILTER:="null"}
+
 # Now that the vars have been shifted
 if [[ ! -v 1 ]]; then
   echo "Error: Directory was not specified" >&2
@@ -182,7 +199,8 @@ if [[ ! -v 1 ]]; then
 fi
 
 PHOTO_DIR="$1"
-SYMLINK="$PHOTO_DIR/latest.jpeg"
+LATEST="$PHOTO_DIR/latest.jpeg"
+THUMB_LATEST="$PHOTO_DIR/thumb_latest.jpeg"
 
 echo "Using DSLR and virtual output $device_v"
 
@@ -203,7 +221,6 @@ fi
 
 # State management
 FFMPEG_PID=""
-GPHOTO_PID=""
 
 # Cleanup function
 cleanup() {
@@ -211,10 +228,6 @@ cleanup() {
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     wait "$FFMPEG_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$GPHOTO_PID" ]] && kill -0 "$GPHOTO_PID" 2>/dev/null; then
-    kill -INT "$GPHOTO_PID" 2>/dev/null || true
-    wait "$GPHOTO_PID" 2>/dev/null || true
   fi
   rm -rf $TMPDIR 2>/dev/null
   exit 0
@@ -230,28 +243,16 @@ wait_for_pid() {
 
 stop_preview() {
   # Stop streaming
-  if [[ -n "$GPHOTO_PID" ]] && kill -0 "$GPHOTO_PID" 2>/dev/null; then
-    echo "Killing GPHOTO..."
-    # Send interrupt signal to ffpmeg
-    kill -9 "$GPHOTO_PID" 2>/dev/null || true
-    # Wait for process to finish dying
-    wait_for_pid "$GPHOTO_PID"
-    # Reset pid
-    GPHOTO_PID=""
-    echo "GPHOTO is dead."
-  fi
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
     echo "Killing FFMPEG..."
     # Send interrupt signal to ffpmeg
-    kill -9 "$FFMPEG_PID" 2>/dev/null || true
+    kill -INT "$FFMPEG_PID" 2>/dev/null || true
     # Wait for process to finish dying
     wait_for_pid "$FFMPEG_PID"
     # Reset pid
     FMPEG_PID=""
     echo "FFMPEG is dead."
   fi
-  pkill gphoto2
-  pkill ffmpeg
 }
 
 link_latest() {
@@ -269,32 +270,7 @@ link_latest() {
     latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
     echo "latest is $latest"
     if [[ -n "$latest" ]]; then
-      local tmp_pic="$PHOTO_DIR/tmp.jpeg"
-      local second_tmp_pic="$PHOTO_DIR/tmp2.jpeg"
-      magick "$latest" -resize 1024x680\! "$tmp_pic"
-
-      if [[ -n "$effect_d" ]]; then
-        case $effect_d in
-        h)
-          echo "Capture will be flipped horizontally."
-          magick "$tmp_pic" -flip "$SYMLINK"
-          rm "$tmp_pic"
-          ;;
-        v)
-          echo "Capture will be flipped vertically."
-          magick "$tmp_pic" -flop "$SYMLINK"
-          rm "$tmp_pic"
-          ;;
-        b)
-          echo "Capture will be flipped both vertically and horizontally."
-          direction_filter=("")
-          magick "$tmp_pic" -flip "$second_tmp_pic"
-          magick "$second_tmp_pic" -flop "$SYMLINK"
-          rm "$tmp_pic" "$second_tmp_pic"
-          ;;
-        esac
-      fi
-
+      magick "$latest" -resize 1024x680\! "$LATEST"
     fi
   fi
 }
@@ -303,7 +279,7 @@ delete() {
   echo "Deleting Photo..." >"$NOTIFICATION_FILE"
   stop_preview
 
-  local latest_referant=$(ls -l "$SYMLINK" | awk '/->/ {print $NF }')
+  local latest_referant=$(ls -l "$LATEST" | awk '/->/ {print $NF }')
   echo "Deleting $latest_referant"
   rm $latest_referant
 
@@ -346,7 +322,8 @@ playback() {
 
   local filters=()
 
-  local main_fmt="scale=width=1024:height=680,${CAMERA_FORMAT}"
+  local main_fmt="scale=width=1024:height=680,${DIRECTION_FILTER},${CAMERA_FORMAT}"
+
   # Render in the webcam's native fps so it gets played back right
   if [[ $advanced = true ]]; then
     filters=(
@@ -386,29 +363,21 @@ playback() {
   fi
 }
 
+capture_preview() {
+  echo "doing nothing "
+  # sudo gphoto2 --reset
+  # sleep 0.4s
+  # cd $TMPDIR
+  # timeout 3.3s sudo gphoto2 --capture-preview --force-overwrite
+}
+
 preview() {
+  # gphoto2 --reset 2>/dev/null || true
+
   link_latest
 
   # Clear the notification before previewing
   echo "" >"$NOTIFICATION_FILE"
-
-  local direction_filter=
-  if [[ -n "$effect_d" ]]; then
-    case $effect_d in
-    h)
-      echo "Video will be flipped horizontally."
-      direction_filter+="hflip"
-      ;;
-    v)
-      echo "Video will be flipped vertically."
-      direction_filter+="vflip"
-      ;;
-    b)
-      echo "Video will be flipped both vertically and horizontally."
-      direction_filter+="hflip,vflip"
-      ;;
-    esac
-  fi
 
   local grid_filter=
   if [[ $grid_r -gt 0 || $grid_c -gt 0 ]]; then
@@ -417,14 +386,13 @@ preview() {
   fi
 
   # Set to null if no settings were applied
-  : ${direction_filter:="null"}
   : ${grid_filter:="null"}
 
   local filters=()
 
   local main_fmt="${CAMERA_FORMAT}"
   local thumb_fmt="scale=width=iw/2:height=ih/2,${CAMERA_FORMAT}"
-  local webcam_filter="${direction_filter},${grid_filter}"
+  local webcam_filter="${DIRECTION_FILTER},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
   local file_count="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
   local notification_filter="drawtext=textfile=${NOTIFICATION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
@@ -435,7 +403,7 @@ preview() {
     filters=(
       "[0:v]split=2[webcam][webcam_thumb]"
       "[1:v]split=2[latest][latest_thumb]"
-      "[webcam_thumb]${thumb_fmt},${direction_filter}[webcam_thumb_filtered]"
+      "[webcam_thumb]${thumb_fmt},${DIRECTION_FILTER}[webcam_thumb_filtered]"
       "[latest]${main_fmt}[overlay]"
       "[latest_thumb]${thumb_fmt}[latest_thumb_scaled]"
       "[webcam]${main_fmt},${webcam_filter}[webcam_filtered]"
@@ -447,7 +415,7 @@ preview() {
   else
     filters=(
       "[0:v]${main_fmt},${webcam_filter}[webcam]"
-      "[1:v]${main_fmt}[latest]"
+      "[1:v]${main_fmt},${DIRECTION_FILTER}[latest]"
       "[webcam][latest]${onion_filter}[mux]"
       "[mux]${text}[output]"
     )
@@ -459,17 +427,22 @@ preview() {
     echo "${filters[*]}"
   )
 
-  gphoto2 --stdout --capture-movie | ffmpeg -i - \
+  ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "/dev/video4" \
     -loop 1 -i $SYMLINK \
-    -vcodec rawvideo \
     -filter_complex "$filter_complex" -map "[output]" \
     -f v4l2 "$device_v" 2>/dev/null &
 
+  # webcamize --stdout |
+  # ffmpeg -i  -i $LATEST \
+  #   -loop 1 \
+  #   -vcodec rawvideo \
+  #   -filter_complex "$filter_complex" -map "[output]" \
+  #   -f v4l2 "$device_v" 2>/dev/null &
+  #
   # Check if process actually started
   FFMPEG_PID=$!
-  GPHOTO_PID=$(pgrep gphoto2)
 
-  echo "Started virtual webcam with ffmpeg PID $FFMPEG_PID and gphoto PID $GPHOTO_PID"
+  echo "Started virtual webcam with ffmpeg PID $FFMPEG_PID"
 }
 
 # Create placeholder image if no photos exist
@@ -481,10 +454,17 @@ fi
 trap cleanup SIGINT SIGTERM EXIT
 
 # Start preview
+capture_preview
+echo "starting preview"
 preview
+
+echo "starting main loop"
 
 # Main loop - check for trigger file
 while true; do
+  # Capture preview file
+  timeout 0.3s capture_preview
+
   # Handle triggers
   if [[ -f "$TRIGGER_CAPTURE" ]]; then
     rm -f "$TRIGGER_CAPTURE"
@@ -502,12 +482,6 @@ while true; do
   fi
 
   # Check if ffmpeg is still running, restart if needed
-  if [[ -n "$GPHOTO_PID" ]] && ! kill -0 "$GPHOTO_PID" 2>/dev/null; then
-    echo "GPHOTO process died, restarting..."
-    GPHOTO_PID=""
-    sleep 1
-    preview
-  fi
   if [[ -n "$FFMPEG_PID" ]] && ! kill -0 "$FFMPEG_PID" 2>/dev/null; then
     echo "FFmpeg process died, restarting..."
     FFMPEG_PID=""
