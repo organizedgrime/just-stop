@@ -1,19 +1,92 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
-use std::path::Path;
+use inquire::Select;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
-use v4l::prelude::*;
 use v4l::video::Capture;
 use v4l::{Device, FourCC};
+
+#[derive(Debug, Clone)]
+struct DeviceInfo {
+    index: usize,
+    path: String,
+    name: String,
+    driver: String,
+}
+
+impl std::fmt::Display for DeviceInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} - {} ({})", self.path, self.name, self.driver)
+    }
+}
+
+fn discover_devices() -> Result<Vec<DeviceInfo>> {
+    let nodes = v4l::context::enum_devices();
+    let mut devices = Vec::new();
+
+    for node in nodes {
+        let index = node.index();
+        if let Ok(device) = Device::new(index) {
+            if let Ok(caps) = device.query_caps() {
+                devices.push(DeviceInfo {
+                    index,
+                    path: node.path().to_string_lossy().to_string(),
+                    name: node.name().unwrap_or_else(|| "Unknown Device".to_string()),
+                    driver: caps.driver.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(devices)
+}
+
+fn pick_input_device() -> Result<DeviceInfo> {
+    println!("🔍 Scanning for video devices...");
+
+    let devices = discover_devices()?;
+    if devices.is_empty() {
+        anyhow::bail!("No video devices found");
+    }
+
+    // Filter for capture devices
+    let input_devices: Vec<DeviceInfo> = devices
+        .into_iter()
+        .filter(|info| {
+            if let Ok(device) = Device::new(info.index) {
+                if let Ok(caps) = device.query_caps() {
+                    return (caps.capabilities & v4l::capability::Flags::VIDEO_CAPTURE).bits() != 0;
+                }
+            }
+            false
+        })
+        .collect();
+
+    if input_devices.is_empty() {
+        anyhow::bail!("No video capture devices found");
+    }
+
+    if input_devices.len() == 1 {
+        println!("📹 Using only available device: {}", input_devices[0]);
+        return Ok(input_devices[0].clone());
+    }
+
+    // Multiple devices - let user pick
+    let selection = Select::new("📹 Select input device:", input_devices.clone())
+        .prompt()
+        .context("Device selection cancelled")?;
+
+    Ok(selection)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting webcam stream with pink grid overlay...");
     println!("Input: /dev/video0 -> Output: /dev/video2");
     println!("Press Ctrl+C to stop the stream");
+
+    let input_info = pick_input_device()?;
+    println!("input device: {input_info}");
 
     // Set up graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
@@ -55,7 +128,25 @@ fn setup_devices() -> Result<(Device, Device), Box<dyn std::error::Error>> {
         return Err("Input device does not support video capture".into());
     }
 
-    // Get current format from input device
+    println!("Available formats:");
+    for format in input_device.enum_formats()? {
+        println!("  {} ({})", format.fourcc, format.description);
+        for framesize in input_device.enum_framesizes(format.fourcc)? {
+            for discrete in framesize.size.to_discrete() {
+                println!("    Size: {}", discrete);
+                for frameinterval in input_device.enum_frameintervals(
+                    framesize.fourcc,
+                    discrete.width,
+                    discrete.height,
+                )? {
+                    println!("      Interval:  {}", frameinterval);
+                }
+            }
+        }
+
+        println!()
+    }
+
     let input_format = input_device.format()?;
     println!(
         "Input format: {}x{}, fourcc: {}",
@@ -92,7 +183,7 @@ fn stream_with_grid_filter(
     let mut ffmpeg = FfmpegCommand::new()
         .input("/dev/video0")
         .args(["-f", "v4l2"]) // Input format
-        .args(["-video_size", "640x480"]) // Set reasonable default size
+        // .args(["-video_size", "1920x1080"]) // Set reasonable default size
         .args(["-framerate", "30"]) // Input framerate
         .filter("drawgrid=width=iw/3:height=ih/4:thickness=3:color=pink@1.0")
         .args(["-f", "v4l2"]) // Output format
@@ -102,58 +193,6 @@ fn stream_with_grid_filter(
 
     println!("FFmpeg process started");
     println!("Grid configuration: 3 columns × 4 rows in pink color");
-
-    // Monitor ffmpeg process
-    while running.load(Ordering::SeqCst) {
-        // Check if ffmpeg process is still running
-        match ffmpeg.as_inner_mut().try_wait()? {
-            Some(status) => {
-                println!("FFmpeg process has terminated with status: {:?}", status);
-                break;
-            }
-            None => {
-                // Process is still running
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
-    }
-
-    // If we're shutting down, kill the ffmpeg process
-    if !running.load(Ordering::SeqCst) {
-        println!("Terminating ffmpeg process...");
-        ffmpeg.kill()?;
-    }
-
-    // Wait for process to fully exit
-    let exit_status = ffmpeg.wait()?;
-    if exit_status.success() {
-        println!("FFmpeg exited successfully");
-    } else {
-        println!("FFmpeg exited with code: {:?}", exit_status.code());
-    }
-
-    Ok(())
-}
-
-// Enhanced version with event monitoring - FIXED EVENT HANDLING
-#[allow(dead_code)]
-fn stream_with_events(
-    _input_device: Device,
-    _output_device: Device,
-    running: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting ffmpeg with event monitoring...");
-
-    let mut ffmpeg = FfmpegCommand::new()
-        .input("/dev/video0")
-        .args(["-f", "v4l2"])
-        .args(["-video_size", "640x480"])
-        .args(["-framerate", "30"])
-        .filter("drawgrid=width=iw/3:height=ih/4:thickness=3:color=pink@1.0")
-        .args(["-f", "v4l2"])
-        .args(["-pix_fmt", "yuv420p"])
-        .output("/dev/video2")
-        .spawn()?;
 
     // Monitor ffmpeg events
     let iter = ffmpeg.iter()?;
@@ -189,32 +228,19 @@ fn stream_with_events(
         }
     }
 
-    Ok(())
-}
-
-// Utility function to check device availability
-#[allow(dead_code)]
-fn check_device_exists(device_path: &str) -> bool {
-    Path::new(device_path).exists()
-}
-
-// Function to gracefully restart stream if needed
-#[allow(dead_code)]
-fn restart_stream_if_needed(input_device: &Device, output_device: &Device) -> Result<bool> {
-    // Check if devices are still accessible
-    match input_device.query_caps() {
-        Ok(_) => {
-            match output_device.query_caps() {
-                Ok(_) => Ok(false), // No restart needed
-                Err(_) => {
-                    println!("Output device lost, restart needed");
-                    Ok(true)
-                }
-            }
-        }
-        Err(_) => {
-            println!("Input device lost, restart needed");
-            Ok(true)
-        }
+    // If we're shutting down, kill the ffmpeg process
+    if !running.load(Ordering::SeqCst) {
+        println!("Terminating ffmpeg process...");
+        ffmpeg.kill()?;
     }
+
+    // Wait for process to fully exit
+    let exit_status = ffmpeg.wait()?;
+    if exit_status.success() {
+        println!("FFmpeg exited successfully");
+    } else {
+        println!("FFmpeg exited with code: {:?}", exit_status.code());
+    }
+
+    Ok(())
 }
