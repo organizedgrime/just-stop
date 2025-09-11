@@ -4,8 +4,9 @@ use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
 use inquire::Select;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use v4l::capability::Flags;
 use v4l::video::Capture;
-use v4l::{Device, FourCC};
+use v4l::{Capabilities, Device, FourCC};
 
 #[derive(Debug, Clone)]
 struct DeviceInfo {
@@ -13,6 +14,12 @@ struct DeviceInfo {
     path: String,
     name: String,
     driver: String,
+    capabilities: Flags,
+}
+
+struct Config {
+    input: DeviceInfo,
+    output: DeviceInfo,
 }
 
 impl std::fmt::Display for DeviceInfo {
@@ -33,7 +40,8 @@ fn discover_devices() -> Result<Vec<DeviceInfo>> {
                     index,
                     path: node.path().to_string_lossy().to_string(),
                     name: node.name().unwrap_or_else(|| "Unknown Device".to_string()),
-                    driver: caps.driver.clone(),
+                    driver: caps.driver,
+                    capabilities: caps.capabilities,
                 });
             }
         }
@@ -42,7 +50,7 @@ fn discover_devices() -> Result<Vec<DeviceInfo>> {
     Ok(devices)
 }
 
-fn pick_input_device() -> Result<DeviceInfo> {
+fn pick_devices() -> Result<Config> {
     println!("🔍 Scanning for video devices...");
 
     let devices = discover_devices()?;
@@ -52,32 +60,33 @@ fn pick_input_device() -> Result<DeviceInfo> {
 
     // Filter for capture devices
     let input_devices: Vec<DeviceInfo> = devices
-        .into_iter()
-        .filter(|info| {
-            if let Ok(device) = Device::new(info.index) {
-                if let Ok(caps) = device.query_caps() {
-                    return (caps.capabilities & v4l::capability::Flags::VIDEO_CAPTURE).bits() != 0;
-                }
-            }
-            false
-        })
+        .iter()
+        .filter(|info| (info.capabilities & v4l::capability::Flags::VIDEO_CAPTURE).bits() != 0)
+        .cloned()
         .collect();
 
     if input_devices.is_empty() {
         anyhow::bail!("No video capture devices found");
     }
-
-    if input_devices.len() == 1 {
-        println!("📹 Using only available device: {}", input_devices[0]);
-        return Ok(input_devices[0].clone());
-    }
-
     // Multiple devices - let user pick
-    let selection = Select::new("📹 Select input device:", input_devices.clone())
+    let input = Select::new("Select input device:", input_devices)
         .prompt()
         .context("Device selection cancelled")?;
 
-    Ok(selection)
+    let output_devices: Vec<DeviceInfo> = devices
+        .into_iter()
+        .filter(|info| (info.capabilities & v4l::capability::Flags::VIDEO_OUTPUT).bits() != 0)
+        .collect();
+
+    if output_devices.is_empty() {
+        anyhow::bail!("No video output devices found");
+    }
+    // Multiple devices - let user pick
+    let output = Select::new("Select output device:", output_devices)
+        .prompt()
+        .context("Device selection cancelled")?;
+
+    Ok(Config { input, output })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,8 +94,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Input: /dev/video0 -> Output: /dev/video2");
     println!("Press Ctrl+C to stop the stream");
 
-    let input_info = pick_input_device()?;
-    println!("input device: {input_info}");
+    let config = pick_devices()?;
+    println!(
+        "input device: {}\noutput device: {}",
+        config.input, config.output
+    );
 
     // Set up graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
