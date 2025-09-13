@@ -17,6 +17,22 @@ struct DeviceInfo {
     capabilities: Flags,
 }
 
+impl DeviceInfo {
+    pub fn path(&self) -> String {
+        format!("/dev/video{}", self.index)
+    }
+
+    pub fn device(&self) -> Result<Device> {
+        Device::new(self.index).map_err(|e| {
+            anyhow::format_err!(
+                "Failed to open {}: {}. Is your webcam connected?",
+                self.path(),
+                e
+            )
+        })
+    }
+}
+
 struct Config {
     input: DeviceInfo,
     output: DeviceInfo,
@@ -50,55 +66,54 @@ fn discover_devices() -> Result<Vec<DeviceInfo>> {
     Ok(devices)
 }
 
-fn pick_devices() -> Result<Config> {
-    println!("🔍 Scanning for video devices...");
-
-    let devices = discover_devices()?;
-    if devices.is_empty() {
-        anyhow::bail!("No video devices found");
-    }
-
-    // Filter for capture devices
-    let input_devices: Vec<DeviceInfo> = devices
-        .iter()
-        .filter(|info| (info.capabilities & v4l::capability::Flags::VIDEO_CAPTURE).bits() != 0)
-        .cloned()
-        .collect();
-
-    if input_devices.is_empty() {
-        anyhow::bail!("No video capture devices found");
-    }
-    // Multiple devices - let user pick
-    let input = Select::new("Select input device:", input_devices)
-        .prompt()
-        .context("Device selection cancelled")?;
-
-    let output_devices: Vec<DeviceInfo> = devices
+fn pick_device<'a>(
+    devices: &'a Vec<DeviceInfo>,
+    kind: &'a str,
+    requirements: Flags,
+) -> Result<DeviceInfo> {
+    let eligible_devices: Vec<&DeviceInfo> = devices
         .into_iter()
-        .filter(|info| (info.capabilities & v4l::capability::Flags::VIDEO_OUTPUT).bits() != 0)
+        .filter(|device| (device.capabilities & requirements).bits() != 0)
         .collect();
 
-    if output_devices.is_empty() {
-        anyhow::bail!("No video output devices found");
+    if eligible_devices.is_empty() {
+        anyhow::bail!("No {kind} devices found");
     }
-    // Multiple devices - let user pick
-    let output = Select::new("Select output device:", output_devices)
-        .prompt()
-        .context("Device selection cancelled")?;
 
-    Ok(Config { input, output })
+    // Multiple devices - let user pick
+    Select::new(&format!("Select {kind} device:"), eligible_devices)
+        .prompt()
+        .context("Device selection cancelled")
+        .cloned()
+}
+
+fn select_device_settings(info: &DeviceInfo) -> Result<()> {
+    let device = info.device()?;
+    let formats = device.enum_formats()?;
+
+    Select::new(&format!("Select format for {}:", info.path), formats)
+        .prompt()
+        .context("Format selection cancelled")?;
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting webcam stream with pink grid overlay...");
-    println!("Input: /dev/video0 -> Output: /dev/video2");
-    println!("Press Ctrl+C to stop the stream");
+    println!("🔍 Scanning for video devices...");
+    let devices = discover_devices()?;
+    let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;
+    let output = pick_device(&devices, "output", Flags::VIDEO_OUTPUT)?;
+    // let config = Config { input, output };
 
-    let config = pick_devices()?;
     println!(
-        "input device: {}\noutput device: {}",
-        config.input, config.output
+        "Input: /dev/video{} -> Output: /dev/video{}",
+        input.index, output.index
     );
+
+    select_device_settings(&input)?;
+    select_device_settings(&output)?;
+
+    println!("Press Ctrl+C to stop the stream");
 
     // Set up graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
@@ -109,25 +124,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // Check and set up devices
-    let (input_device, output_device) = setup_devices()?;
+    // let (input_device, output_device) = setup_devices()?;
 
     // Start the streaming loop
-    stream_with_grid_filter(input_device, output_device, running)?;
+    // stream_with_grid_filter(input_device, output_device, running)?;
 
     println!("Stream ended gracefully");
     Ok(())
 }
 
-fn setup_devices() -> Result<(Device, Device), Box<dyn std::error::Error>> {
+/* fn setup_devices() -> Result<(Device, Device), Box<dyn std::error::Error>> {
     println!("Setting up video devices...");
 
     // Open and configure input device
-    let input_device = Device::new(0).map_err(|e| {
-        format!(
-            "Failed to open /dev/video0: {}. Is your webcam connected?",
-            e
-        )
-    })?;
 
     println!("Input device capabilities:");
     let input_caps = input_device.query_caps()?;
@@ -182,25 +191,25 @@ fn setup_devices() -> Result<(Device, Device), Box<dyn std::error::Error>> {
     }
 
     Ok((input_device, output_device))
-}
+} */
 
 fn stream_with_grid_filter(
-    _input_device: Device,
-    _output_device: Device,
+    input: DeviceInfo,
+    output: DeviceInfo,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
 
     // Build ffmpeg command - FIXED REDUNDANT ARGS
     let mut ffmpeg = FfmpegCommand::new()
-        .input("/dev/video0")
+        .input(format!("/dev/video{}", input.index))
         .args(["-f", "v4l2"]) // Input format
         // .args(["-video_size", "1920x1080"]) // Set reasonable default size
         .args(["-framerate", "30"]) // Input framerate
         .filter("drawgrid=width=iw/3:height=ih/4:thickness=3:color=pink@1.0")
         .args(["-f", "v4l2"]) // Output format
         .args(["-pix_fmt", "yuv420p"]) // Pixel format
-        .output("/dev/video2")
+        .output(format!("/dev/video{}", output.index))
         .spawn()?;
 
     println!("FFmpeg process started");
