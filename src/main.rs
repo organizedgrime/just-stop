@@ -1,12 +1,30 @@
 use anyhow::{Context as _, Result};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
+use ffmpeg_sidecar::named_pipes::NamedPipe;
+use ffmpeg_sidecar::pipe_name;
 use inquire::Select;
+use std::fmt::Display;
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 use v4l::capability::Flags;
+use v4l::frameinterval::FrameIntervalEnum;
 use v4l::video::Capture;
-use v4l::{Capabilities, Device, FourCC};
+use v4l::{Device, FourCC, Fraction, FrameSize};
+mod pixel;
+use crate::pixel::{
+    create_fourcc_to_ffmpeg_map, create_fourcc_to_ffmpeg_map_owned, is_compressed_format,
+};
+
+#[derive(Debug, Clone)]
+struct JustDevice {
+    info: DeviceInfo,
+    settings: DeviceSettings,
+}
 
 #[derive(Debug, Clone)]
 struct DeviceInfo {
@@ -17,25 +35,64 @@ struct DeviceInfo {
     capabilities: Flags,
 }
 
-impl DeviceInfo {
-    pub fn path(&self) -> String {
-        format!("/dev/video{}", self.index)
+#[derive(Debug, Clone)]
+struct DeviceSettings {
+    // Codec
+    format: FourCC,
+    // Frame size
+    size: JustFrameSize,
+    // Framerate
+    fraction: Fraction,
+}
+impl DeviceSettings {
+    pub fn ffmpeg_r(&self) -> String {
+        format!("{}/{}", self.fraction.denominator, self.fraction.numerator)
     }
+}
 
+impl DeviceInfo {
     pub fn device(&self) -> Result<Device> {
         Device::new(self.index).map_err(|e| {
             anyhow::format_err!(
                 "Failed to open {}: {}. Is your webcam connected?",
-                self.path(),
+                self.path,
                 e
             )
         })
     }
 }
 
+#[derive(Debug, Clone)]
+struct JustFrameSize {
+    fourcc: FourCC,
+    width: u32,
+    height: u32,
+}
+impl Display for JustFrameSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{}x{}", self.width, self.height))
+    }
+}
+
+struct JustFormatDescription(v4l::format::Description);
+impl JustFormatDescription {
+    pub fn description(&self) -> String {
+        self.0.description.clone()
+    }
+    pub fn fourcc(&self) -> FourCC {
+        self.0.fourcc
+    }
+}
+
+impl std::fmt::Display for JustFormatDescription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.description())
+    }
+}
+
 struct Config {
-    input: DeviceInfo,
-    output: DeviceInfo,
+    input: JustDevice,
+    output: JustDevice,
 }
 
 impl std::fmt::Display for DeviceInfo {
@@ -70,7 +127,7 @@ fn pick_device<'a>(
     devices: &'a Vec<DeviceInfo>,
     kind: &'a str,
     requirements: Flags,
-) -> Result<DeviceInfo> {
+) -> Result<JustDevice> {
     let eligible_devices: Vec<&DeviceInfo> = devices
         .into_iter()
         .filter(|device| (device.capabilities & requirements).bits() != 0)
@@ -80,22 +137,72 @@ fn pick_device<'a>(
         anyhow::bail!("No {kind} devices found");
     }
 
-    // Multiple devices - let user pick
-    Select::new(&format!("Select {kind} device:"), eligible_devices)
+    let info: DeviceInfo = Select::new(&format!("Select {kind} device:"), eligible_devices)
         .prompt()
         .context("Device selection cancelled")
-        .cloned()
-}
+        .cloned()?;
 
-fn select_device_settings(info: &DeviceInfo) -> Result<()> {
     let device = info.device()?;
-    let formats = device.enum_formats()?;
 
-    Select::new(&format!("Select format for {}:", info.path), formats)
+    let formats: Vec<JustFormatDescription> = device
+        .enum_formats()?
+        .into_iter()
+        .map(JustFormatDescription)
+        .collect();
+
+    let format = Select::new(&format!("Select format for {}:", info.path), formats)
         .prompt()
         .context("Format selection cancelled")?;
 
-    Ok(())
+    println!("format: {}", format.0);
+
+    /* let sizes: Vec<FrameSize> = device.enum_framesizes(format.fourcc())?;
+        let mut discretes: Vec<JustFrameSize> = vec![];
+        for size in sizes {
+            for discrete in size.size.to_discrete() {
+                discretes.push(JustFrameSize {
+                    fourcc: size.fourcc,
+                    width: discrete.width,
+                    height: discrete.height,
+                });
+            }
+        }
+
+        let size = Select::new("Select frame size:", discretes)
+            .prompt()
+            .context("Frame size selection cancelled")?;
+
+        let intervals = device.enum_frameintervals(size.fourcc, size.width, size.height)?;
+        let mut fractions = vec![];
+        for interval in intervals {
+            if let FrameIntervalEnum::Discrete(fraction) = interval.interval {
+                fractions.push(fraction);
+            } else {
+                anyhow::bail!("Stepwise fps not yet implemented");
+            }
+        }
+
+        let fraction = Select::new("Select fraction (aka fps):", fractions)
+            .prompt()
+            .context("Fraction selection cancelled")?;
+    */
+
+    let settings = DeviceSettings {
+        format: format.fourcc(),
+        size: JustFrameSize {
+            fourcc: FourCC::default(),
+            width: 1920,
+            height: 1080,
+        },
+        fraction: Fraction {
+            numerator: 1,
+            denominator: 30,
+        },
+    };
+
+    println!("settings selected:\n{settings:?}");
+
+    Ok(JustDevice { info, settings })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,16 +210,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let devices = discover_devices()?;
     let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;
     let output = pick_device(&devices, "output", Flags::VIDEO_OUTPUT)?;
-    // let config = Config { input, output };
 
-    println!(
-        "Input: /dev/video{} -> Output: /dev/video{}",
-        input.index, output.index
-    );
-
-    select_device_settings(&input)?;
-    select_device_settings(&output)?;
-
+    println!("Input: {} -> Output: {}", input.info.path, output.info.path);
     println!("Press Ctrl+C to stop the stream");
 
     // Set up graceful shutdown
@@ -123,96 +222,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    // Check and set up devices
-    // let (input_device, output_device) = setup_devices()?;
-
+    let config = Config { input, output };
     // Start the streaming loop
-    // stream_with_grid_filter(input_device, output_device, running)?;
+    stream_with_grid_filter(config, running)?;
 
     println!("Stream ended gracefully");
     Ok(())
 }
 
-/* fn setup_devices() -> Result<(Device, Device), Box<dyn std::error::Error>> {
-    println!("Setting up video devices...");
-
-    // Open and configure input device
-
-    println!("Input device capabilities:");
-    let input_caps = input_device.query_caps()?;
-    println!("  Driver: {}", input_caps.driver);
-    println!("  Card: {}", input_caps.card);
-    println!("  Capabilities: 0x{:x}", input_caps.capabilities);
-
-    // Check if input device supports video capture - FIXED LOGIC
-    if (input_caps.capabilities & v4l::capability::Flags::VIDEO_CAPTURE).bits() == 0 {
-        return Err("Input device does not support video capture".into());
-    }
-
-    println!("Available formats:");
-    for format in input_device.enum_formats()? {
-        println!("  {} ({})", format.fourcc, format.description);
-        for framesize in input_device.enum_framesizes(format.fourcc)? {
-            for discrete in framesize.size.to_discrete() {
-                println!("    Size: {}", discrete);
-                for frameinterval in input_device.enum_frameintervals(
-                    framesize.fourcc,
-                    discrete.width,
-                    discrete.height,
-                )? {
-                    println!("      Interval:  {}", frameinterval);
-                }
-            }
-        }
-
-        println!()
-    }
-
-    let input_format = input_device.format()?;
-    println!(
-        "Input format: {}x{}, fourcc: {}",
-        input_format.width,
-        input_format.height,
-        FourCC::from(input_format.fourcc)
-    );
-
-    // Open output device (virtual camera)
-    let output_device = Device::new(2)
-        .map_err(|e| format!("Failed to open /dev/video2: {}. Create virtual camera with: sudo modprobe v4l2loopback devices=1 video_nr=2", e))?;
-
-    println!("Output device capabilities:");
-    let output_caps = output_device.query_caps()?;
-    println!("  Driver: {}", output_caps.driver);
-    println!("  Card: {}", output_caps.card);
-
-    // Check if output device supports video output - FIXED LOGIC
-    if (output_caps.capabilities & v4l::capability::Flags::VIDEO_OUTPUT).bits() == 0 {
-        return Err("Output device does not support video output".into());
-    }
-
-    Ok((input_device, output_device))
-} */
-
 fn stream_with_grid_filter(
-    input: DeviceInfo,
-    output: DeviceInfo,
+    config: Config,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
 
-    // Build ffmpeg command - FIXED REDUNDANT ARGS
+    let map = create_fourcc_to_ffmpeg_map_owned();
+
+    println!("GOT THE MAP");
+    let Config { input, output } = config;
+
+    let stringfmt = input.settings.format.to_string();
+    let pixfmt = map.get(&stringfmt).unwrap();
+
+    // Build ffmpeg command
     let mut ffmpeg = FfmpegCommand::new()
-        .input(format!("/dev/video{}", input.index))
-        .args(["-f", "v4l2"]) // Input format
-        // .args(["-video_size", "1920x1080"]) // Set reasonable default size
-        .args(["-framerate", "30"]) // Input framerate
-        .filter("drawgrid=width=iw/3:height=ih/4:thickness=3:color=pink@1.0")
+        .args(["-f", "v4l2"]) // Force v4l2 for input
+        // .args(["-video_size", &input.settings.size.to_string()]) // Set reasonable default size
+        .args(["-r", &input.settings.ffmpeg_r()]) // Input framerate
+        .input(input.info.path)
+        .filter_complex("hue=s=0")
         .args(["-f", "v4l2"]) // Output format
-        .args(["-pix_fmt", "yuv420p"]) // Pixel format
-        .output(format!("/dev/video{}", output.index))
+        .args(["-pix_fmt", &pixfmt])
+        .args(["-fflags", "+genpts"])
+        .args(["-use_wallclock_as_timestamps", "1"])
+        .output(&output.info.path)
+        .print_command()
         .spawn()?;
 
     println!("FFmpeg process started");
+
+    thread::sleep(Duration::from_secs(2));
+
+    let mut ffplay = Command::new("ffplay")
+        .args(["-i", &output.info.path])
+        .spawn()?;
+
     println!("Grid configuration: 3 columns × 4 rows in pink color");
 
     // Monitor ffmpeg events
@@ -253,6 +307,7 @@ fn stream_with_grid_filter(
     if !running.load(Ordering::SeqCst) {
         println!("Terminating ffmpeg process...");
         ffmpeg.kill()?;
+        ffplay.kill()?;
     }
 
     // Wait for process to fully exit
@@ -261,6 +316,13 @@ fn stream_with_grid_filter(
         println!("FFmpeg exited successfully");
     } else {
         println!("FFmpeg exited with code: {:?}", exit_status.code());
+    }
+    // Wait for process to fully exit
+    let exit_status = ffplay.wait()?;
+    if exit_status.success() {
+        println!("FFPlay exited successfully");
+    } else {
+        println!("FFPlay exited with code: {:?}", exit_status.code());
     }
 
     Ok(())
