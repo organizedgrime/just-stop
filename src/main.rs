@@ -274,6 +274,10 @@ fn stream_with_grid_filter(
     for event in iter {
         if !running.load(Ordering::SeqCst) {
             break;
+        } else if let Some(result) = ffplay.try_wait()? {
+            println!("{}", result.to_string());
+            ffmpeg.kill()?;
+            break;
         }
 
         match event {
