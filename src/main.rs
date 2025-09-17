@@ -1,104 +1,22 @@
 use anyhow::{Context as _, Result};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
-use ffmpeg_sidecar::named_pipes::NamedPipe;
-use ffmpeg_sidecar::pipe_name;
 use inquire::Select;
-use std::fmt::Display;
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use v4l::capability::Flags;
-use v4l::frameinterval::FrameIntervalEnum;
-use v4l::video::Capture;
-use v4l::{Device, FourCC, Fraction, FrameSize};
+use v4l::{Device, FourCC, Fraction, video::Capture};
+mod device;
 mod pixel;
-use crate::pixel::{
-    create_fourcc_to_ffmpeg_map, create_fourcc_to_ffmpeg_map_owned, is_compressed_format,
-};
-
-#[derive(Debug, Clone)]
-struct JustDevice {
-    info: DeviceInfo,
-    settings: DeviceSettings,
-}
-
-#[derive(Debug, Clone)]
-struct DeviceInfo {
-    index: usize,
-    path: String,
-    name: String,
-    driver: String,
-    capabilities: Flags,
-}
-
-#[derive(Debug, Clone)]
-struct DeviceSettings {
-    // Codec
-    format: FourCC,
-    // Frame size
-    size: JustFrameSize,
-    // Framerate
-    fraction: Fraction,
-}
-impl DeviceSettings {
-    pub fn ffmpeg_r(&self) -> String {
-        format!("{}/{}", self.fraction.denominator, self.fraction.numerator)
-    }
-}
-
-impl DeviceInfo {
-    pub fn device(&self) -> Result<Device> {
-        Device::new(self.index).map_err(|e| {
-            anyhow::format_err!(
-                "Failed to open {}: {}. Is your webcam connected?",
-                self.path,
-                e
-            )
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct JustFrameSize {
-    fourcc: FourCC,
-    width: u32,
-    height: u32,
-}
-impl Display for JustFrameSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{}x{}", self.width, self.height))
-    }
-}
-
-struct JustFormatDescription(v4l::format::Description);
-impl JustFormatDescription {
-    pub fn description(&self) -> String {
-        self.0.description.clone()
-    }
-    pub fn fourcc(&self) -> FourCC {
-        self.0.fourcc
-    }
-}
-
-impl std::fmt::Display for JustFormatDescription {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.description())
-    }
-}
+use crate::pixel::create_fourcc_to_ffmpeg_map_owned;
+use device::*;
 
 struct Config {
     input: JustDevice,
     output: JustDevice,
-}
-
-impl std::fmt::Display for DeviceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} - {} ({})", self.path, self.name, self.driver)
-    }
 }
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {

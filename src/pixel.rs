@@ -1,22 +1,4 @@
 use std::collections::HashMap;
-use v4l::FourCC;
-
-// pub fn ffmpeg_format(format: &FourCC) -> vec![&str] {
-//     let stringfmt = format.to_string();
-//     let pixfmt = FOURCC_TO_PIXFMT[&stringfmt];
-//     if is_compressed_format(&stringfmt) {
-//         return ["-input_format", pixfmt];
-//     } else {
-//         return ["-pixel_format", pixfmt];
-//     }
-// }
-
-pub fn is_compressed_format(fourcc: &str) -> bool {
-    matches!(
-        fourcc,
-        "MJPG" | "JPEG" | "H264" | "H265" | "VP8 " | "VP9 " | "XVID" | "DIVX"
-    )
-}
 
 /// Creates a hardcoded HashMap mapping FOURCC codes to FFmpeg pixel format names
 ///
