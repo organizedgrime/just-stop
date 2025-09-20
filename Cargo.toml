@@ -5,13 +5,14 @@ edition = "2024"
 
 [dependencies]
 anyhow = { version = "1.0" }
-crossbeam-channel = { version = "0.5.15" }
+confique = { version = "0.3.1", features = ["toml"] }
 ctrlc = { version = "3.4" }
-env_logger = { version = "0.11.8" }
 etcetera = { version = "0.9.0" }
 ffmpeg-sidecar = { version = "2.1.0", features = ["named_pipes"] }
 inquire = { version = "0.7.5" }
-kdl = { version = "6.5.0" }
-signal-hook = { version = "0.3.18" }
+serde = { version = "*", features = ["derive"] }
 v4l = { version = "0.14.0" }
+# env_logger = { version = "0.11.8" }
+# crossbeam-channel = { version = "0.5.15" }
+# signal-hook = { version = "0.3.18" }
 

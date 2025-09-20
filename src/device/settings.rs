@@ -1,15 +1,17 @@
 use crate::device::JustFrameSize;
+use confique::Config;
 use v4l::{FourCC, Fraction};
 
-#[derive(Debug, Clone)]
+#[derive(Config, Debug, Clone)]
 pub struct DeviceSettings {
-    // Codec
-    pub format: FourCC,
-    // Frame size
+    pub format: [u8; 4],
+    #[config(nested)]
     pub size: JustFrameSize,
-    // Framerate
+
+    #[config(nested)]
     pub fraction: Fraction,
 }
+
 impl DeviceSettings {
     pub fn ffmpeg_r(&self) -> String {
         format!("{}/{}", self.fraction.denominator, self.fraction.numerator)
