@@ -30,7 +30,7 @@ fn discover_devices() -> Result<Vec<DeviceInfo>> {
                     path: node.path().to_string_lossy().to_string(),
                     name: node.name().unwrap_or_else(|| "Unknown Device".to_string()),
                     driver: caps.driver,
-                    capabilities: caps.capabilities,
+                    capabilities: caps.capabilities.into(),
                 });
             }
         }
@@ -46,7 +46,7 @@ fn pick_device<'a>(
 ) -> Result<JustDevice> {
     let eligible_devices: Vec<&DeviceInfo> = devices
         .into_iter()
-        .filter(|device| (device.capabilities & requirements).bits() != 0)
+        .filter(|device| (Flags::from(device.capabilities) & requirements).bits() != 0)
         .collect();
 
     if eligible_devices.is_empty() {
@@ -104,13 +104,13 @@ fn pick_device<'a>(
     */
 
     let settings = DeviceSettings {
-        format: format.fourcc(),
+        format: format.fourcc().repr,
         size: JustFrameSize {
-            fourcc: FourCC::default(),
+            // fourcc: FourCC::default(),
             width: 1920,
             height: 1080,
         },
-        fraction: Fraction {
+        fraction: JustFraction {
             numerator: 1,
             denominator: 30,
         },
@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    let config = Config { input, output };
+    let config = Conf { input, output };
     // Start the streaming loop
     stream_with_grid_filter(config, running)?;
 
@@ -147,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn stream_with_grid_filter(
-    config: Config,
+    config: Conf,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
@@ -155,9 +155,9 @@ fn stream_with_grid_filter(
     let map = create_fourcc_to_ffmpeg_map_owned();
 
     println!("GOT THE MAP");
-    let Config { input, output } = config;
+    let Conf { input, output } = config;
 
-    let stringfmt = input.settings.format.to_string();
+    let stringfmt = FourCC::new(&input.settings.format).to_string();
     let pixfmt = map.get(&stringfmt).unwrap();
 
     // Build ffmpeg command

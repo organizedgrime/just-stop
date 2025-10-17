@@ -1,13 +1,14 @@
 use anyhow::Result;
+use confique::Config;
 use v4l::{Device, capability::Flags};
 
-#[derive(Debug, Clone)]
+#[derive(Config, Debug, Clone)]
 pub struct DeviceInfo {
     pub index: usize,
     pub path: String,
     pub name: String,
     pub driver: String,
-    pub capabilities: Flags,
+    pub capabilities: u32,
 }
 
 impl DeviceInfo {

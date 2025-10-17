@@ -1,4 +1,4 @@
-use crate::device::JustFrameSize;
+use crate::device::{JustFraction, JustFrameSize};
 use confique::Config;
 use v4l::{FourCC, Fraction};
 
@@ -9,7 +9,7 @@ pub struct DeviceSettings {
     pub size: JustFrameSize,
 
     #[config(nested)]
-    pub fraction: Fraction,
+    pub fraction: JustFraction,
 }
 
 impl DeviceSettings {

@@ -8,14 +8,16 @@ const CONFIG_FILE: &str = "config.kdl";
 
 #[derive(Config)]
 pub struct Conf {
+    #[config(nested)]
     pub input: JustDevice,
+    #[config(nested)]
     pub output: JustDevice,
 }
 
 impl Conf {
     pub fn load() -> Result<()> {
         let strategy = choose_base_strategy()?;
-        strategy.config_dir()
+        strategy.config_dir();
         Ok(())
     }
 }
