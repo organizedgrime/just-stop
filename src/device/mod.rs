@@ -8,10 +8,11 @@ use confique::Config;
 pub use format::*;
 pub use fraction::*;
 pub use info::*;
+use serde::Serialize;
 pub use settings::*;
 pub use size::*;
 
-#[derive(Config, Debug, Clone)]
+#[derive(Serialize, Config, Debug, Clone)]
 pub struct JustDevice {
     #[config(nested)]
     pub info: DeviceInfo,

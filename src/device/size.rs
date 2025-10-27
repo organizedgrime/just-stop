@@ -1,7 +1,8 @@
 use confique::Config;
+use serde::Serialize;
 use std::fmt::Display;
 
-#[derive(Config, Debug, Clone)]
+#[derive(Serialize, Config, Debug, Clone)]
 pub struct JustFrameSize {
     pub width: u32,
     pub height: u32,

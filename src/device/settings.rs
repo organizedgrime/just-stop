@@ -1,8 +1,9 @@
 use crate::device::{JustFraction, JustFrameSize};
 use confique::Config;
+use serde::Serialize;
 use v4l::{FourCC, Fraction};
 
-#[derive(Config, Debug, Clone)]
+#[derive(Serialize, Config, Debug, Clone)]
 pub struct DeviceSettings {
     pub format: [u8; 4],
     #[config(nested)]

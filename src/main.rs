@@ -9,12 +9,12 @@ use std::thread;
 use std::time::Duration;
 use v4l::capability::Flags;
 use v4l::{Device, FourCC, Fraction, video::Capture};
-mod config;
+mod conf;
 mod device;
 mod pixel;
 
 use crate::pixel::create_fourcc_to_ffmpeg_map_owned;
-use config::*;
+use conf::*;
 use device::*;
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {
@@ -122,6 +122,8 @@ fn pick_device<'a>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Conf::setup()?;
+
     println!("🔍 Scanning for video devices...");
     let devices = discover_devices()?;
     let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;

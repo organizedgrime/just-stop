@@ -1,8 +1,9 @@
 use anyhow::Result;
 use confique::Config;
+use serde::Serialize;
 use v4l::{Device, capability::Flags};
 
-#[derive(Config, Debug, Clone)]
+#[derive(Serialize, Config, Debug, Clone)]
 pub struct DeviceInfo {
     pub index: usize,
     pub path: String,

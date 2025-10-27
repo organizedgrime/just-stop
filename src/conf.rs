@@ -1,0 +1,66 @@
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::PathBuf,
+};
+
+use anyhow::Result;
+use confique::{Config, toml::FormatOptions};
+
+use etcetera::{BaseStrategy, choose_base_strategy};
+use serde::Serialize;
+
+use crate::device::JustDevice;
+
+const CONFIG_FILE: &str = "config.toml";
+
+#[derive(Serialize, Config)]
+pub struct Conf {
+    #[config(nested)]
+    pub input: JustDevice,
+    #[config(nested)]
+    pub output: JustDevice,
+}
+
+impl Conf {
+    pub fn get_dir() -> Result<PathBuf> {
+        let strategy = choose_base_strategy()?;
+        let folder = strategy.config_dir().join("just-stop");
+        Ok(folder)
+    }
+
+    pub fn get_path() -> Result<PathBuf> {
+        Ok(Self::get_dir()?.join(CONFIG_FILE))
+    }
+
+    pub fn load() -> Result<Conf> {
+        let conf = Conf::from_file(Conf::get_path()?)?;
+        Ok(conf)
+    }
+
+    pub fn setup() -> Result<()> {
+        let dir = Self::get_dir()?;
+        let path = Self::get_path()?;
+
+        if !dir.exists() {
+            fs::create_dir(dir)?;
+        }
+
+        if !path.exists() {
+            println!("Creating new template file for configuration...");
+            let mut file = File::create(Conf::get_path()?)?;
+            let toml = confique::toml::template::<Conf>(FormatOptions::default());
+            file.write_all(toml.as_bytes())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let strategy = choose_base_strategy()?;
+        let path = strategy.config_dir().join(CONFIG_FILE);
+        let toml_string = toml::to_string_pretty(self)?;
+        fs::write(path, toml_string)?;
+        Ok(())
+    }
+}

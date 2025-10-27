@@ -1,7 +1,8 @@
 use confique::Config;
+use serde::Serialize;
 use v4l::Fraction;
 
-#[derive(Config, Debug, Clone)]
+#[derive(Serialize, Config, Debug, Clone)]
 pub struct JustFraction {
     pub numerator: u32,
     pub denominator: u32,
