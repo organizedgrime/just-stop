@@ -66,11 +66,18 @@ fn pick_device<'a>(
         .map(JustFormatDescription)
         .collect();
 
-    let format = Select::new(&format!("Select format for {}:", info.path), formats)
-        .prompt()
-        .context("Format selection cancelled")?;
-
-    println!("format: {}", format.0);
+    // For output devices (like v4l2 loopback), formats may not be enumerable
+    // Use a default format if none are available
+    let format = if formats.is_empty() {
+        println!("No formats available for {}, using default YUYV", info.path);
+        FourCC::new(b"YUYV")
+    } else {
+        let selected = Select::new(&format!("Select format for {}:", info.path), formats)
+            .prompt()
+            .context("Format selection cancelled")?;
+        println!("format: {}", selected.0);
+        selected.fourcc()
+    };
 
     /* let sizes: Vec<FrameSize> = device.enum_framesizes(format.fourcc())?;
         let mut discretes: Vec<JustFrameSize> = vec![];
@@ -104,7 +111,7 @@ fn pick_device<'a>(
     */
 
     let settings = DeviceSettings {
-        format: format.fourcc().repr,
+        format: format.repr,
         size: JustFrameSize {
             // fourcc: FourCC::default(),
             width: 1920,
@@ -122,14 +129,34 @@ fn pick_device<'a>(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Conf::setup()?;
+    // Ensure config directory exists
+    Conf::setup()?;
 
-    println!("🔍 Scanning for video devices...");
-    let devices = discover_devices()?;
-    let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;
-    let output = pick_device(&devices, "output", Flags::VIDEO_OUTPUT)?;
+    // Try to load existing config, or create new one interactively
+    let config = match Conf::load() {
+        Ok(conf) => {
+            println!("✓ Loaded existing configuration");
+            println!("Input: {} -> Output: {}", conf.input.info.path, conf.output.info.path);
+            conf
+        }
+        Err(_) => {
+            println!("No existing config found, creating new configuration...");
+            println!("🔍 Scanning for video devices...");
+            let devices = discover_devices()?;
+            let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;
+            let output = pick_device(&devices, "output", Flags::VIDEO_OUTPUT)?;
 
-    println!("Input: {} -> Output: {}", input.info.path, output.info.path);
+            let config = Conf { input, output };
+
+            // Save the newly created config
+            config.save()?;
+            println!("✓ Configuration saved");
+            println!("Input: {} -> Output: {}", config.input.info.path, config.output.info.path);
+
+            config
+        }
+    };
+
     println!("Press Ctrl+C to stop the stream");
 
     // Set up graceful shutdown
@@ -140,7 +167,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    let config = Conf { input, output };
     // Start the streaming loop
     stream_with_grid_filter(config, running)?;
 

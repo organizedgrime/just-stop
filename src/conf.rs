@@ -57,8 +57,7 @@ impl Conf {
     }
 
     pub fn save(&self) -> Result<()> {
-        let strategy = choose_base_strategy()?;
-        let path = strategy.config_dir().join(CONFIG_FILE);
+        let path = Self::get_path()?;
         let toml_string = toml::to_string_pretty(self)?;
         fs::write(path, toml_string)?;
         Ok(())
