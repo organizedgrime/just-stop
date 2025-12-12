@@ -2,6 +2,8 @@ use anyhow::{Context as _, Result};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
 use inquire::Select;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +18,14 @@ mod pixel;
 use crate::pixel::create_fourcc_to_ffmpeg_map_owned;
 use conf::*;
 use device::*;
+
+// Trigger file paths
+const TMPDIR: &str = "/tmp/just_stop";
+const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
+const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
+const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
+const PHOTO_DIR: &str = "./photos";
+const FILE_PREFIX: &str = "photo";
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {
     let nodes = v4l::context::enum_devices();
@@ -132,6 +142,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure config directory exists
     Conf::setup()?;
 
+    // Clean up any orphaned ffmpeg/ffplay processes from previous runs
+    println!("Cleaning up any existing processes...");
+    Command::new("pkill")
+        .args(["-f", "ffmpeg.*video"])
+        .output()
+        .ok();
+    Command::new("pkill")
+        .arg("ffplay")
+        .output()
+        .ok();
+    thread::sleep(Duration::from_millis(500));
+
     // Try to load existing config, or create new one interactively
     let config = match Conf::load() {
         Ok(conf) => {
@@ -157,6 +179,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Create necessary directories
+    fs::create_dir_all(TMPDIR)?;
+    fs::create_dir_all(PHOTO_DIR)?;
+
     println!("Press Ctrl+C to stop the stream");
 
     // Set up graceful shutdown
@@ -168,16 +194,138 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // Start the streaming loop
-    stream_with_grid_filter(config, running)?;
+    let mut restart = true;
+    while restart {
+        restart = stream_with_grid_filter(&config, running.clone())?;
+    }
+
+    // Cleanup
+    fs::remove_dir_all(TMPDIR).ok();
 
     println!("Stream ended gracefully");
     Ok(())
 }
 
+fn get_latest_photo() -> Option<PathBuf> {
+    fs::read_dir(PHOTO_DIR)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext == "bmp")
+                .unwrap_or(false)
+        })
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata.modified().ok()?;
+            Some((entry.path(), modified))
+        })
+        .max_by_key(|(_, modified)| *modified)
+        .map(|(path, _)| path)
+}
+
+fn get_photo_count() -> usize {
+    fs::read_dir(PHOTO_DIR)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry.path().extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext == "bmp")
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn capture_photo(output_device_path: &str) -> Result<()> {
+    let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
+    let count = get_photo_count();
+    let filename = format!("{}/{}_{:03}_{}.bmp", PHOTO_DIR, FILE_PREFIX, count, timestamp);
+
+    println!("Capturing photo to {}...", filename);
+
+    // Capture from the output device (virtual cam) which is already receiving the stream
+    // This avoids the "device busy" issue since we can read from v4l2loopback
+    let output = Command::new("ffmpeg")
+        .args(["-f", "v4l2"])
+        .args(["-i", output_device_path])
+        .args(["-frames:v", "1"])
+        .args(["-lossless", "1"])
+        .args(["-y", &filename])
+        .output()?;
+
+    if output.status.success() {
+        println!("✓ Captured: {}", filename);
+        Ok(())
+    } else {
+        anyhow::bail!("Failed to capture photo: {}", String::from_utf8_lossy(&output.stderr))
+    }
+}
+
+fn delete_latest_photo() -> Result<()> {
+    if let Some(latest) = get_latest_photo() {
+        println!("Deleting {}...", latest.display());
+        fs::remove_file(&latest)?;
+        println!("✓ Deleted");
+        Ok(())
+    } else {
+        anyhow::bail!("No photos to delete")
+    }
+}
+
+fn create_playback(output_device: &str) -> Result<()> {
+    let playback_file = format!("{}/playback.mp4", TMPDIR);
+
+    // Remove old playback file if it exists
+    if Path::new(&playback_file).exists() {
+        fs::remove_file(&playback_file)?;
+    }
+
+    println!("Creating playback video...");
+
+    let pattern = format!("{}/*.bmp", PHOTO_DIR);
+
+    // Create the video from photos
+    let output = Command::new("ffmpeg")
+        .args(["-framerate", "12"])
+        .args(["-pattern_type", "glob"])
+        .args(["-i", &pattern])
+        .args(["-filter_complex", "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]"])
+        .args(["-map", "[output]"])
+        .args(["-c:v", "libx264"])
+        .args(["-y", &playback_file])
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to create playback: {}", String::from_utf8_lossy(&output.stderr))
+    }
+
+    println!("Playing back video...");
+
+    // Play the video to the output device
+    let output = Command::new("ffmpeg")
+        .args(["-re"])
+        .args(["-i", &playback_file])
+        .args(["-f", "v4l2"])
+        .arg(output_device)
+        .output()?;
+
+    if output.status.success() {
+        println!("✓ Playback complete");
+        Ok(())
+    } else {
+        anyhow::bail!("Failed to play video: {}", String::from_utf8_lossy(&output.stderr))
+    }
+}
+
 fn stream_with_grid_filter(
-    config: Conf,
+    config: &Conf,
     running: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
 
     let map = create_fourcc_to_ffmpeg_map_owned();
@@ -185,21 +333,26 @@ fn stream_with_grid_filter(
     println!("GOT THE MAP");
     let Conf { input, output } = config;
 
+    // Clone paths for later use
+    let input_path = input.info.path.clone();
+    let output_path = output.info.path.clone();
+    let framerate = input.settings.ffmpeg_r();
+
     let stringfmt = FourCC::new(&input.settings.format).to_string();
-    let pixfmt = map.get(&stringfmt).unwrap();
+    let pixfmt = map.get(&stringfmt).unwrap().clone();
 
     // Build ffmpeg command
     let mut ffmpeg = FfmpegCommand::new()
         .args(["-f", "v4l2"]) // Force v4l2 for input
         // .args(["-video_size", &input.settings.size.to_string()]) // Set reasonable default size
-        .args(["-r", &input.settings.ffmpeg_r()]) // Input framerate
-        .input(input.info.path)
+        .args(["-r", &framerate]) // Input framerate
+        .input(&input_path)
         .filter_complex("hue=s=0")
-        .args(["-f", "v4l2"]) // Output format
+        .args(["-f", "v4l2"])
         .args(["-pix_fmt", &pixfmt])
         .args(["-fflags", "+genpts"])
         .args(["-use_wallclock_as_timestamps", "1"])
-        .output(&output.info.path)
+        .output(&output_path)
         .print_command()
         .spawn()?;
 
@@ -208,20 +361,66 @@ fn stream_with_grid_filter(
     thread::sleep(Duration::from_secs(2));
 
     let mut ffplay = Command::new("ffplay")
-        .args(["-i", &output.info.path])
+        .args(["-i", &output_path])
         .spawn()?;
 
     println!("Grid configuration: 3 columns × 4 rows in pink color");
 
+
+
     // Monitor ffmpeg events
     let iter = ffmpeg.iter()?;
     for event in iter {
+        // Check for trigger files
+        if Path::new(TRIGGER_CAPTURE).exists() {
+            fs::remove_file(TRIGGER_CAPTURE)?;
+            println!("\n📸 Capture triggered");
+
+            // Only kill ffplay, keep ffmpeg running so we can capture from output device
+            ffplay.kill()?;
+
+            if let Err(e) = capture_photo(&output_path) {
+                eprintln!("Capture failed: {}", e);
+            }
+
+            ffmpeg.kill()?;
+
+            // Restart ffplay after capture
+            return Ok(true);
+        }
+
+        if Path::new(TRIGGER_DELETION).exists() {
+            fs::remove_file(TRIGGER_DELETION)?;
+            println!("\n🗑️  Delete triggered");
+            if let Err(e) = delete_latest_photo() {
+                eprintln!("Delete failed: {}", e);
+            }
+            return Ok(true);
+        }
+
+        if Path::new(TRIGGER_PLAYBACK).exists() {
+            fs::remove_file(TRIGGER_PLAYBACK)?;
+            println!("\n🎬 Playback triggered");
+            // Kill current stream for playback
+            ffmpeg.kill()?;
+            ffplay.kill()?;
+
+            if let Err(e) = create_playback(&output_path) {
+                eprintln!("Playback failed: {}", e);
+            }
+
+            // Break to restart stream
+            return Ok(true);
+        }
+
         if !running.load(Ordering::SeqCst) {
-            break;
+            ffmpeg.kill()?;
+            ffplay.kill()?;
+            return Ok(false);
         } else if let Some(result) = ffplay.try_wait()? {
             println!("{}", result.to_string());
             ffmpeg.kill()?;
-            break;
+            return Ok(false);
         }
 
         match event {
@@ -251,27 +450,6 @@ fn stream_with_grid_filter(
         }
     }
 
-    // If we're shutting down, kill the ffmpeg process
-    if !running.load(Ordering::SeqCst) {
-        println!("Terminating ffmpeg process...");
-        ffmpeg.kill()?;
-        ffplay.kill()?;
-    }
-
-    // Wait for process to fully exit
-    let exit_status = ffmpeg.wait()?;
-    if exit_status.success() {
-        println!("FFmpeg exited successfully");
-    } else {
-        println!("FFmpeg exited with code: {:?}", exit_status.code());
-    }
-    // Wait for process to fully exit
-    let exit_status = ffplay.wait()?;
-    if exit_status.success() {
-        println!("FFPlay exited successfully");
-    } else {
-        println!("FFPlay exited with code: {:?}", exit_status.code());
-    }
-
-    Ok(())
+    println!("Stream ended gracefully");
+    Ok(false)
 }
