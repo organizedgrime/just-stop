@@ -5,12 +5,12 @@ use inquire::Select;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use v4l::capability::Flags;
-use v4l::{Device, FourCC, Fraction, video::Capture};
+use v4l::{video::Capture, Device, FourCC, Fraction};
 mod conf;
 mod device;
 mod pixel;
@@ -148,17 +148,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .args(["-f", "ffmpeg.*video"])
         .output()
         .ok();
-    Command::new("pkill")
-        .arg("ffplay")
-        .output()
-        .ok();
+    Command::new("pkill").arg("ffplay").output().ok();
     thread::sleep(Duration::from_millis(500));
 
     // Try to load existing config, or create new one interactively
     let config = match Conf::load() {
         Ok(conf) => {
             println!("✓ Loaded existing configuration");
-            println!("Input: {} -> Output: {}", conf.input.info.path, conf.output.info.path);
+            println!(
+                "Input: {} -> Output: {}",
+                conf.input.info.path, conf.output.info.path
+            );
             conf
         }
         Err(_) => {
@@ -173,7 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Save the newly created config
             config.save()?;
             println!("✓ Configuration saved");
-            println!("Input: {} -> Output: {}", config.input.info.path, config.output.info.path);
+            println!(
+                "Input: {} -> Output: {}",
+                config.input.info.path, config.output.info.path
+            );
 
             config
         }
@@ -211,7 +214,9 @@ fn get_latest_photo() -> Option<PathBuf> {
         .ok()?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.path().extension()
+            entry
+                .path()
+                .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext == "bmp")
                 .unwrap_or(false)
@@ -231,7 +236,9 @@ fn get_photo_count() -> usize {
             entries
                 .filter_map(|entry| entry.ok())
                 .filter(|entry| {
-                    entry.path().extension()
+                    entry
+                        .path()
+                        .extension()
                         .and_then(|ext| ext.to_str())
                         .map(|ext| ext == "bmp")
                         .unwrap_or(false)
@@ -244,7 +251,9 @@ fn get_photo_count() -> usize {
 fn capture_photo(output_device_path: &str) -> Result<()> {
     let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
     let count = get_photo_count();
-    let filename = format!("{}/{}_{:03}_{}.bmp", PHOTO_DIR, FILE_PREFIX, count, timestamp);
+    let filename_only = format!("{}_{:03}_{}.bmp", FILE_PREFIX, count, timestamp);
+    let filename = format!("{}/{}", PHOTO_DIR, filename_only);
+    let symlink = format!("{}/latest.bmp", PHOTO_DIR);
 
     println!("Capturing photo to {}...", filename);
 
@@ -260,9 +269,21 @@ fn capture_photo(output_device_path: &str) -> Result<()> {
 
     if output.status.success() {
         println!("✓ Captured: {}", filename);
+
+        // Remove old symlink if it exists
+        let _ = fs::remove_file(&symlink);
+
+        // Create symlink with just the filename (not full path)
+        Command::new("ln")
+            .arg("-s")
+            .args([&filename_only, &symlink])
+            .output()?;
         Ok(())
     } else {
-        anyhow::bail!("Failed to capture photo: {}", String::from_utf8_lossy(&output.stderr))
+        anyhow::bail!(
+            "Failed to capture photo: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 }
 
@@ -294,14 +315,20 @@ fn create_playback(output_device: &str) -> Result<()> {
         .args(["-framerate", "12"])
         .args(["-pattern_type", "glob"])
         .args(["-i", &pattern])
-        .args(["-filter_complex", "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]"])
+        .args([
+            "-filter_complex",
+            "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]",
+        ])
         .args(["-map", "[output]"])
         .args(["-c:v", "libx264"])
         .args(["-y", &playback_file])
         .output()?;
 
     if !output.status.success() {
-        anyhow::bail!("Failed to create playback: {}", String::from_utf8_lossy(&output.stderr))
+        anyhow::bail!(
+            "Failed to create playback: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 
     println!("Playing back video...");
@@ -318,7 +345,10 @@ fn create_playback(output_device: &str) -> Result<()> {
         println!("✓ Playback complete");
         Ok(())
     } else {
-        anyhow::bail!("Failed to play video: {}", String::from_utf8_lossy(&output.stderr))
+        anyhow::bail!(
+            "Failed to play video: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 }
 
@@ -342,12 +372,23 @@ fn stream_with_grid_filter(
     let pixfmt = map.get(&stringfmt).unwrap().clone();
 
     // Build ffmpeg command
+    let latest_photo = format!("{}/latest.bmp", PHOTO_DIR);
+    let filter = if Path::new(&latest_photo).exists() {
+        // Overlay the latest photo with 55% opacity
+        format!(
+            "[0:v]hue=s=0[base];movie={}:loop=0,setpts=N/(FRAME_RATE*TB),format=yuva420p,colorchannelmixer=aa=0.55[overlay];[base][overlay]overlay",
+            latest_photo
+        )
+    } else {
+        // No photo yet, just apply hue filter
+        "hue=s=0".to_string()
+    };
+
     let mut ffmpeg = FfmpegCommand::new()
         .args(["-f", "v4l2"]) // Force v4l2 for input
-        // .args(["-video_size", &input.settings.size.to_string()]) // Set reasonable default size
         .args(["-r", &framerate]) // Input framerate
         .input(&input_path)
-        .filter_complex("hue=s=0")
+        .filter_complex(&filter)
         .args(["-f", "v4l2"])
         .args(["-pix_fmt", &pixfmt])
         .args(["-fflags", "+genpts"])
@@ -360,13 +401,9 @@ fn stream_with_grid_filter(
 
     thread::sleep(Duration::from_secs(2));
 
-    let mut ffplay = Command::new("ffplay")
-        .args(["-i", &output_path])
-        .spawn()?;
+    let mut ffplay = Command::new("ffplay").args(["-i", &output_path]).spawn()?;
 
     println!("Grid configuration: 3 columns × 4 rows in pink color");
-
-
 
     // Monitor ffmpeg events
     let iter = ffmpeg.iter()?;
