@@ -413,14 +413,14 @@ fn stream_with_grid_filter(
             fs::remove_file(TRIGGER_CAPTURE)?;
             println!("\n📸 Capture triggered");
 
-            // Only kill ffplay, keep ffmpeg running so we can capture from output device
+            ffmpeg.kill()?;
             ffplay.kill()?;
 
-            if let Err(e) = capture_photo(&output_path) {
+            thread::sleep(Duration::from_millis(5000));
+
+            if let Err(e) = capture_photo(&input_path) {
                 eprintln!("Capture failed: {}", e);
             }
-
-            ffmpeg.kill()?;
 
             // Restart ffplay after capture
             return Ok(true);

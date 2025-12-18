@@ -1,4 +1,4 @@
-#!/bin/bash
+#/bin/bash
 set -uo pipefail
 
 TMPDIR="/tmp/just_stop"
@@ -12,24 +12,26 @@ NOTIFICATION_FILE="$TMPDIR/notification.txt"
 CAMERA_FORMAT="format=yuv420p"
 
 # real devices
-devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
+# devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
 # virtual devices
-virtual_devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=1))
+# virtual_devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=1))
 
-if [[ ${#devices[@]} -eq 0 ]]; then
-  echo "There are no webcams available"
-  exit 1
-fi
-
-if [[ ${#virtual_devices[@]} -eq 0 ]]; then
-  echo "There are no virtual cameras available"
-  exit 1
-fi
+# if [[ ${#devices[@]} -eq 0 ]]; then
+#   echo "There are no webcams available"
+#   exit 1
+# fi
+#
+# if [[ ${#virtual_devices[@]} -eq 0 ]]; then
+#   echo "There are no virtual cameras available"
+#   exit 1
+# fi
 
 # Virtual device
-device_v="${virtual_devices[0]}"
+device_v="/dev/video10"
+
+# "${virtual_devices[0]}"
 # Webcam device
-device_w="${devices[0]}"
+device_w="/dev/video1"
 
 # Grid rows
 grid_r=0
@@ -88,27 +90,29 @@ while getopts ":v:w:r:c:d:g:o:p:C:ah" o; do
     ;;&
   w)
     selected_wcam="/dev/video$OPTARG"
-    if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
-      echo "$selected_wcam is a valid webcam"
-      declare OPTARG=$selected_wcam
-    else
-      echo "$selected_wcam isn't a valid webcam." >&2
-      echo -e "\nValid webcams: ${devices[@]}"
-      exit 1
-    fi
+    # if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
+    echo "$selected_wcam is a valid webcam"
+    declare OPTARG=$selected_wcam
+    # else
+    #   echo "$selected_wcam isn't a valid webcam." >&2
+    #   echo -e "\nValid webcams: ${devices[@]}"
+    #   exit 1
+    # fi
     ;;&
   v)
     selected_vcam="/dev/video$OPTARG"
-    if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
-      echo "$selected_vcam is a valid virtual device"
-      vcam_fps=$(v4l2-ctl -d2 -P | perl -n -e'/(\d+)\// && print $1')
-      echo "vcam_fps: $vcam_fps"
-      declare OPTARG=$selected_vcam
-    else
-      echo "$selected_wcam isn't a valid virtual device." >&2
-      echo -e "\nValid virtual devices: ${virtual_devices[@]}"
-      exit 1
-    fi
+    # if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
+    echo "$selected_vcam is a valid virtual device"
+    vcam_fps=$(v4l2-ctl -d "$selected_vcam" -P 2>/dev/null | perl -n -e'/(\d+)\// && print $1')
+    # Default to 30 fps if we can't detect it (common for v4l2loopback)
+    : ${vcam_fps:=30}
+    echo "vcam_fps: $vcam_fps"
+    declare OPTARG=$selected_vcam
+    # else
+    #   echo "$selected_wcam isn't a valid virtual device." >&2
+    #   echo -e "\nValid virtual devices: ${virtual_devices[@]}"
+    #   exit 1
+    # fi
     ;;&
   # Zero to one hundred values
   r | c | g | o)
@@ -261,7 +265,9 @@ link_latest() {
     # Get the latest file path
     latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
     echo "latest is $latest"
-    [[ -n "$latest" ]] && ln -sf "$latest" "$SYMLINK"
+    # Extract just the filename for the symlink target
+    local latest_basename=$(basename "$latest")
+    [[ -n "$latest" ]] && ln -sf "$latest_basename" "$SYMLINK"
   fi
 }
 
@@ -423,10 +429,10 @@ preview() {
   )
 
   # Start virtual camera with overlay
-  ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "$device_w" \
+  ffmpeg -f v4l2 -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i $SYMLINK \
     -filter_complex "$filter_complex" -map "[output]" \
-    -f v4l2 "$device_v" 2>/dev/null &
+    -f v4l2 "$device_v" &
   FFMPEG_PID=$!
 
   # Check if process actually started

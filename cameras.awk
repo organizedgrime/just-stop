@@ -1,4 +1,4 @@
-#!/usr/bin/awk -f
+#/usr/bin/evn awk -f
 
 # Pass in virtual=1 for loopback cams, virtual=0 for real cams
 BEGIN {
