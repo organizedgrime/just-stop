@@ -19,3 +19,9 @@ pub struct JustDevice {
     #[config(nested)]
     pub settings: DeviceSettings,
 }
+
+impl JustDevice {
+    pub fn path(&self) -> &str {
+        &self.info.path
+    }
+}

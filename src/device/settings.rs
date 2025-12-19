@@ -14,6 +14,9 @@ pub struct DeviceSettings {
 }
 
 impl DeviceSettings {
+    pub fn rate(&self) -> f32 {
+        self.fraction.numerator as f32 / self.fraction.denominator as f32
+    }
     pub fn ffmpeg_r(&self) -> String {
         format!("{}/{}", self.fraction.denominator, self.fraction.numerator)
     }

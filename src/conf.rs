@@ -5,9 +5,9 @@ use std::{
 };
 
 use anyhow::Result;
-use confique::{Config, toml::FormatOptions};
+use confique::{toml::FormatOptions, Config};
 
-use etcetera::{BaseStrategy, choose_base_strategy};
+use etcetera::{choose_base_strategy, BaseStrategy};
 use serde::Serialize;
 
 use crate::device::JustDevice;
