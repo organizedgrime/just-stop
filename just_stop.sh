@@ -197,6 +197,7 @@ fi
 
 PHOTO_DIR="$1"
 SYMLINK="$PHOTO_DIR/latest.bmp"
+SNAPSHOT="$PHOTO_DIR/snapshot.bmp"
 
 echo "Using webcam $device_w and virtual output $device_v"
 
@@ -288,21 +289,22 @@ delete() {
 capture() {
   echo "Capturing Photo..." >"$NOTIFICATION_FILE"
 
-  stop_preview
+  # stop_preview
 
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
   local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
   echo "Capturing photo..."
   # Capture photo with error handling
-  if ffmpeg -f v4l2 -input_format yuyv422 -video_size 1920x1080 -i "$device_w" \
-    -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$new_photo" 2>/dev/null; then
-    echo "Captured: $new_photo"
-  else
-    echo "Failed to capture photo, continuing..."
-  fi
+  # if ffmpeg -f v4l2 -input_format yuyv422 -video_size 1920x1080 -i "$device_w" \
+  #   -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$new_photo" 2>/dev/null; then
+  #   echo "Captured: $new_photo"
+  # else
+  #   echo "Failed to capture photo, continuing..."
+  # fi
+  cp $SNAPSHOT $new_photo
 
   echo "Restarting preview..."
-  preview
+  # preview
 }
 
 playback() {
@@ -408,7 +410,7 @@ preview() {
       "[latest]${main_fmt}[overlay]"
       "[latest_thumb]${thumb_fmt}[latest_thumb_scaled]"
       "[webcam]${main_fmt},${webcam_filter}[webcam_filtered]"
-      "[webcam_filtered][overlay]${onion_filter}[mux]"
+      "[webcam_filtered][overlay]${onion_filter}[blended];[blended]split=2[mux][snapshot]"
       "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
       "[mux]${text}[main]"
       "[left_stack][main]hstack=inputs=2[output]"
@@ -417,7 +419,7 @@ preview() {
     filters=(
       "[0:v]${main_fmt},${webcam_filter}[webcam]"
       "[1:v]${main_fmt}[latest]"
-      "[webcam][latest]${onion_filter}[mux]"
+      "[webcam][latest]${onion_filter}[blended];[blended]split=2[mux][snapshot]"
       "[mux]${text}[output]"
     )
   fi
@@ -431,8 +433,10 @@ preview() {
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -video_size 1920x1080 -framerate 30 -i "$device_w" \
     -loop 1 -i $SYMLINK \
-    -filter_complex "$filter_complex" -map "[output]" \
-    -f v4l2 "$device_v" &
+    -filter_complex "$filter_complex" \
+    -map "[output]" -f mpegts "udp://127.0.0.1:8090" \
+    -map "[snapshot]" -r 1 -update 1 -y "$SNAPSHOT" &
+
   FFMPEG_PID=$!
 
   # Check if process actually started
