@@ -31,7 +31,7 @@ device_v="/dev/video10"
 
 # "${virtual_devices[0]}"
 # Webcam device
-device_w="/dev/video1"
+device_w="/dev/video3"
 
 # Grid rows
 grid_r=0
@@ -254,7 +254,7 @@ stop_preview() {
 
 link_latest() {
   # Store all matching files with timestamps
-  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
+  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -not -name "snapshot.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
   file_c=$(find "$PHOTO_DIR" -name "*.bmp" -type f | wc -l)
   # Count the number of matching files
   echo "file_c: ${file_c}"
@@ -294,14 +294,24 @@ capture() {
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
   local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
   echo "Capturing photo..."
-  # Capture photo with error handling
-  # if ffmpeg -f v4l2 -input_format yuyv422 -video_size 1920x1080 -i "$device_w" \
-  #   -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$new_photo" 2>/dev/null; then
-  #   echo "Captured: $new_photo"
-  # else
-  #   echo "Failed to capture photo, continuing..."
-  # fi
+
+  if [[ ! -f $SNAPSHOT ]]; then
+    # Capture photo with error handling
+    if ffmpeg -f v4l2 -video_size 1920x1080 -i "$device_w" \
+      -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$SNAPSHOT" 2>"$TMPDIR/error"; then
+      echo "Captured snapshot: $SNAPSHOT"
+    else
+      cat "$TMPDIR/error"
+      echo "Failed to capture photo, continuing..."
+    fi
+  fi
+
+  if [[ ! -s $SNAPSHOT ]]; then
+    cp $new_photo $SNAPSHOT
+  fi
+
   cp $SNAPSHOT $new_photo
+  echo "Captured: $new_photo"
 
   echo "Restarting preview..."
   # preview
@@ -429,6 +439,10 @@ preview() {
     IFS=\;
     echo "${filters[*]}"
   )
+
+  echo "filter:\n$filter_complex\n"
+
+  sleep 0.2
 
   # Start virtual camera with overlay
   ffmpeg -f v4l2 -video_size 1920x1080 -framerate 30 -i "$device_w" \
