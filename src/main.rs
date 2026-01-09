@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Sender};
 use ffmpeg_sidecar::{
-    child::FfmpegChild,
     command::FfmpegCommand,
     event::{FfmpegEvent, LogLevel},
 };
@@ -16,20 +15,21 @@ use std::time::Duration;
 use v4l::{capability::Flags, v4l2};
 use v4l::{video::Capture, Device, FourCC};
 mod conf;
-mod device;
 mod pixel;
 
 use crate::pixel::create_fourcc_to_ffmpeg_map_owned;
+use conf::stream::*;
 use conf::*;
-use device::*;
 
 // Trigger file paths
 const TMPDIR: &str = "/tmp/just_stop";
 const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
 const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
 const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
-const SNAPSHOT: &str = "/tmp/just_stop/snapshot.png";
+// const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
+const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
 const PHOTO_DIR: &str = "./photos";
+const LATEST: &str = "./photos/latest.bmp";
 const FILE_PREFIX: &str = "photo";
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {
@@ -166,10 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = match Conf::load() {
         Ok(conf) => {
             println!("✓ Loaded existing configuration");
-            println!(
-                "Input: {} -> Output: {}",
-                conf.input.info.path, conf.output.info.path
-            );
+            println!("Input: {} -> Output: {}", conf.input.info.path, conf.output);
             conf
         }
         Err(_) => {
@@ -177,7 +174,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("🔍 Scanning for video devices...");
             let devices = discover_devices()?;
             let input = pick_device(&devices, "input", Flags::VIDEO_CAPTURE)?;
-            let output = pick_device(&devices, "output", Flags::VIDEO_OUTPUT)?;
+            let output = JustStream {
+                tcp: false,
+                port: 8090,
+            };
 
             let config = Conf { input, output };
 
@@ -186,7 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✓ Configuration saved");
             println!(
                 "Input: {} -> Output: {}",
-                config.input.info.path, config.output.info.path
+                config.input.info.path, config.output
             );
 
             config
@@ -212,37 +212,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(Duration::from_secs(5));
 
     let (s, r) = unbounded::<Message>();
+    let output_path = config.output.to_string();
 
-    let ffplay_path = config.output.info.path.clone();
     thread::spawn(move || {
-        let mut playing: Option<Child> = None;
+        let mut ffplay_pid: Option<u32> = None;
         loop {
+            println!("loop repeats");
             if r.is_empty() {
-                thread::sleep(Duration::from_secs(1));
-                println!("just waiting to start ffplay on {ffplay_path}");
+                thread::sleep(Duration::from_millis(333));
             } else {
                 match r.recv() {
                     Ok(message) => {
                         if message == Message::Start {
-                            if playing.is_some() {
+                            println!("Received Start message");
+                            let mut ffplay_cmd = Command::new("ffplay");
+                            ffplay_cmd
+                                .args(["-fflags", "nobuffer"])
+                                .args(["-flags", "low_delay"])
+                                .arg("-framedrop")
+                                .arg(&output_path);
+                            println!("ffplay cmd: {:?}", ffplay_cmd);
+
+                            if ffplay_pid.is_some() {
                                 println!("already healthy");
-                            } else if let Ok(child) =
-                                // Command::new("ffplay").arg("udp://127.0.0.1:8090").spawn()
-                                Command::new("vlc")
-                                    // .arg(format!("v4l2://{}", &ffplay_path))
-                                    .arg("udp://127.0.0.1:8090")
-                                    .spawn()
-                            {
-                                playing = Some(child);
+                            } else if let Ok(child) = ffplay_cmd.spawn() {
+                                println!("spawned ffplay");
+                                ffplay_pid = Some(child.id());
                             } else {
                                 println!("error occurred spawning ffplay");
                             }
                         } else {
-                            if let Some(child) = playing.as_mut() {
-                                child.kill().unwrap();
+                            println!("Received Stop message");
+                            if let Some(pid) = ffplay_pid {
+                                Command::new("kill")
+                                    .args(["-9", &pid.to_string()])
+                                    .output()
+                                    .expect("unable to kill ffplay; it is running");
+                                println!("Killed ffplay");
                             } else {
                                 println!("cannot kill ffplay; it isn't running");
+                                return;
                             }
+
+                            // Cleanup
+                            fs::remove_dir_all(TMPDIR).ok();
+
+                            println!("Stream ended gracefully");
                         }
                     }
                     Err(e) => {
@@ -267,17 +282,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while restart {
         restart = stream_with_grid_filter(&config, running.clone(), &s)?;
     }
-    s.send(Message::Start)?;
 
-    thread::sleep(Duration::from_secs(5));
+    // thread::sleep(Duration::from_secs(5));
 
     // mirror_process.kill()?;
     s.send(Message::Stop)?;
-
-    // Cleanup
     fs::remove_dir_all(TMPDIR).ok();
+    Command::new("pkill").arg("ffplay").output().ok();
 
-    println!("Stream ended gracefully");
+    println!("the program is now over");
     Ok(())
 }
 
@@ -348,30 +361,29 @@ fn get_photo_count() -> usize {
         .unwrap_or(0)
 }
 
-fn capture_photo(mirror_device_path: &str) -> Result<()> {
+fn capture_photo() -> Result<()> {
     let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
     let count = get_photo_count();
     let filename_only = format!("{}_{:03}_{}.bmp", FILE_PREFIX, count, timestamp);
     let filename = format!("{}/{}", PHOTO_DIR, filename_only);
-    let symlink = format!("{}/latest.bmp", PHOTO_DIR);
 
     println!("Capturing photo to {}...", filename);
 
-    // Capture from the output device (virtual cam) which is already receiving the stream
-    // This avoids the "device busy" issue since we can read from v4l2loopback
+    // Copy the snapshot we already have saved over to the new file name
     Command::new("cp").arg(SNAPSHOT).arg(&filename).output()?;
 
     // if output.status.success() {
     println!("✓ Captured: {}", filename);
 
     // Remove old symlink if it exists
-    let _ = fs::remove_file(&symlink);
+    let _ = fs::remove_file(LATEST);
 
     // Create symlink with just the filename (not full path)
     Command::new("ln")
         .arg("-s")
-        .args([&filename_only, &symlink])
+        .args([&filename_only, LATEST])
         .output()?;
+
     Ok(())
 }
 
@@ -440,6 +452,32 @@ fn create_playback(output_device: &str) -> Result<()> {
     }
 }
 
+fn init_snapshot_latest(input_path: &str) -> Result<()> {
+    // If we don't yet have a snapshot (starting up the program)
+    // Kick off a dedicated image captrure
+    if !Path::new(&SNAPSHOT).exists() {
+        FfmpegCommand::new()
+            .format("v4l2")
+            .input(&input_path)
+            .filter_complex("[0:v]hue=s=0,scale=1920:1080[output]")
+            .rate(5.0)
+            .args(["-lossless", "1"])
+            .args(["-frames:v", "1"])
+            .arg("-y")
+            .map("[output]")
+            .output(SNAPSHOT)
+            .print_command()
+            .spawn()?
+            .wait()?;
+
+        thread::sleep(Duration::from_millis(100));
+
+        capture_photo()?;
+    }
+
+    Ok(())
+}
+
 fn stream_with_grid_filter(
     config: &Conf,
     running: Arc<AtomicBool>,
@@ -454,7 +492,7 @@ fn stream_with_grid_filter(
 
     // Clone paths for later use
     let input_path = input.info.path.clone();
-    let output_path = output.info.path.clone();
+    let output_path = output.to_string();
     let framerate = input.settings.ffmpeg_r();
 
     let stringfmt = FourCC::new(&input.settings.format).to_string();
@@ -463,11 +501,15 @@ fn stream_with_grid_filter(
     // Build ffmpeg command
     let latest_photo = format!("{}/latest.bmp", PHOTO_DIR);
 
+    if (!Path::new(&latest_photo).exists()) {
+        init_snapshot_latest(&input_path)?;
+    }
+
     let onion_opacity = 0.55;
     let onion_filter = format!("blend=all_mode=normal:all_opacity={}", onion_opacity);
 
     let filter = [
-        "[0:v]hue=s=0;scale=1920:1080[mirror]",
+        "[0:v]hue=s=0,scale=1920:1080[mirror]",
         "[1:v]scale=1920:1080[latest]",
         &format!("[mirror][latest]{}[mux]", onion_filter),
         "[mux]split=2[stream][snapshot]",
@@ -484,7 +526,10 @@ fn stream_with_grid_filter(
         // .pix_fmt(&pixfmt)
         .input(&input_path)
         .input(&latest_photo)
-        .filter_complex(&filter)
+        // .args(["-input_format", "nv12"])
+        // .args(["-video_size", "1920x1080"])
+        .filter_complex(filter)
+        // .args(["-filter_complex", &format!("\"{}\"", filter)])
         .args(["-fflags", "+genpts"])
         .args(["-use_wallclock_as_timestamps", "1"])
         .map("[stream]")
@@ -494,7 +539,7 @@ fn stream_with_grid_filter(
         .args(["-x264-params", "\"repeat-headers=1:bframes=0\""])
         .rate(24.0)
         .format("mpegts")
-        .output("udp://127.0.0.1:8090")
+        .output(&output_path)
         .map("[snapshot]")
         .rate(1.0)
         .args(["-update", "1"])
@@ -524,7 +569,7 @@ fn stream_with_grid_filter(
 
             thread::sleep(Duration::from_millis(5000));
 
-            if let Err(e) = capture_photo(&input_path) {
+            if let Err(e) = capture_photo() {
                 eprintln!("Capture failed: {}", e);
             }
 
@@ -558,6 +603,7 @@ fn stream_with_grid_filter(
 
         if !running.load(Ordering::SeqCst) {
             ffmpeg.kill()?;
+            s.send(Message::Stop)?;
             return Ok(false);
         }
         // Velse if let Some(result) = ffplay.try_wait()? {
@@ -593,6 +639,6 @@ fn stream_with_grid_filter(
         }
     }
 
-    println!("Stream ended gracefully");
+    s.send(Message::Stop)?;
     Ok(false)
 }

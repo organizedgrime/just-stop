@@ -10,7 +10,12 @@ use confique::{toml::FormatOptions, Config};
 use etcetera::{choose_base_strategy, BaseStrategy};
 use serde::Serialize;
 
-use crate::device::JustDevice;
+mod device;
+pub mod stream;
+
+pub use device::*;
+
+use stream::JustStream;
 
 const CONFIG_FILE: &str = "config.toml";
 
@@ -18,8 +23,9 @@ const CONFIG_FILE: &str = "config.toml";
 pub struct Conf {
     #[config(nested)]
     pub input: JustDevice,
+
     #[config(nested)]
-    pub output: JustDevice,
+    pub output: JustStream,
 }
 
 impl Conf {

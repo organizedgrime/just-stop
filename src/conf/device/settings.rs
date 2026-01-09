@@ -1,4 +1,4 @@
-use crate::device::{JustFraction, JustFrameSize};
+use crate::conf::device::{JustFraction, JustFrameSize};
 use confique::Config;
 use serde::Serialize;
 use v4l::{FourCC, Fraction};
