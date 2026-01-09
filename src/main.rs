@@ -26,8 +26,8 @@ const TMPDIR: &str = "/tmp/just_stop";
 const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
 const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
 const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
-// const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
-const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
+const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
+// const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
 const PHOTO_DIR: &str = "./photos";
 const LATEST: &str = "./photos/latest.bmp";
 const FILE_PREFIX: &str = "photo";
@@ -209,8 +209,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (s, r) = unbounded::<Message>();
 
     // let mut mirror_process = start_mirror(&config)?;
-
-    thread::sleep(Duration::from_secs(5));
 
     let output_path = config.output.to_string();
 
@@ -508,9 +506,9 @@ fn init_snapshot_latest(input_path: &str) -> Result<()> {
             .wait()?;
 
         thread::sleep(Duration::from_millis(100));
-
-        capture_photo()?;
     }
+
+    capture_photo()?;
 
     Ok(())
 }
@@ -535,13 +533,16 @@ fn stream_with_grid_filter(
     let stringfmt = FourCC::new(&input.settings.format).to_string();
     let pixfmt = map.get(&stringfmt).unwrap().clone();
 
-    if (!Path::new(&LATEST).exists()) {
+    if get_latest_photo().is_none() {
+        println!("initializing latest.bmp");
         init_snapshot_latest(&input_path)?;
+    } else {
+        println!("already initialized latest.bmp");
     }
 
     let onion_opacity = 0.55;
     let onion_filter = format!("blend=all_mode=normal:all_opacity={}", onion_opacity);
-
+    //
     let filter = [
         "[0:v]hue=s=0,scale=1920:1080[mirror]",
         "[1:v]scale=1920:1080[latest]",
@@ -549,6 +550,15 @@ fn stream_with_grid_filter(
         "[mux]split=2[stream][snapshot]",
     ]
     .join(";");
+
+    // let filter = [
+    //     "[0:v]hue=s=0,scale=1920:1080[cam]",
+    //     "[1:v]scale=1920:1080[latest]",
+    //     "[cam]split=2[snapshot][mirror]",
+    //     &format!("[mirror][latest]{}[stream]", onion_filter),
+    //     // "[mux]split=2[stream][snapshot]",
+    // ]
+    // .join(";");
 
     //   ffmpeg -i /dev/video3 \
     // -filter_complex "[0:v]split=2[stream][snap]" \
@@ -561,7 +571,12 @@ fn stream_with_grid_filter(
         .args(["-input_format", "nv12"])
         .args(["-video_size", "1920x1080"])
         .input(&input_path)
+        // .args(["-stream_loop", "1"])
+        .arg("-re")
+        .arg("-y")
         .args(["-loop", "1"])
+        .args(["-f", "image2"])
+        // .args(["-framerate", "5"])
         .input(&LATEST)
         .filter_complex(filter)
         // .args(["-filter_complex", &format!("\"{}\"", filter)])
