@@ -201,17 +201,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    let running_handler = running.clone();
     ctrlc::set_handler(move || {
-        println!("\nReceived Ctrl+C, shutting down gracefully...");
-        r.store(false, Ordering::SeqCst);
+        println!("\nReceived Ctrl+C");
+        running_handler.store(false, Ordering::SeqCst);
     })?;
+    let (s, r) = unbounded::<Message>();
 
     // let mut mirror_process = start_mirror(&config)?;
 
     thread::sleep(Duration::from_secs(5));
 
-    let (s, r) = unbounded::<Message>();
     let output_path = config.output.to_string();
 
     thread::spawn(move || {
@@ -219,7 +219,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             println!("loop repeats");
             if r.is_empty() {
-                thread::sleep(Duration::from_millis(333));
+                // Check for trigger files
+                if Path::new(TRIGGER_CAPTURE).exists() {
+                    fs::remove_file(TRIGGER_CAPTURE).unwrap();
+                    println!("\n📸 Capture triggered");
+
+                    // ffmpeg.kill()?;
+
+                    // thread::sleep(Duration::from_millis(5000));
+
+                    if let Err(e) = capture_photo() {
+                        eprintln!("Capture failed: {}", e);
+                    }
+
+                    // Restart ffplay after capture
+                    // return Ok(true);
+                }
+
+                if Path::new(TRIGGER_DELETION).exists() {
+                    fs::remove_file(TRIGGER_DELETION).unwrap();
+                    println!("\n🗑️  Delete triggered");
+                    if let Err(e) = delete_latest_photo() {
+                        eprintln!("Delete failed: {}", e);
+                    }
+                }
+
+                if Path::new(TRIGGER_PLAYBACK).exists() {
+                    fs::remove_file(TRIGGER_PLAYBACK).unwrap();
+                    println!("\n🎬 Playback triggered");
+
+                    // if let Err(e) = create_playback(&output_path) {
+                    //     eprintln!("Playback failed: {}", e);
+                    // }
+                    //
+                    // Break to restart stream
+                }
             } else {
                 match r.recv() {
                     Ok(message) => {
@@ -269,6 +303,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Start playing the output, always
             // if let Ok(ffplay) =
             // {};
+            thread::sleep(Duration::from_millis(333));
         }
     });
 
@@ -376,13 +411,15 @@ fn capture_photo() -> Result<()> {
     println!("✓ Captured: {}", filename);
 
     // Remove old symlink if it exists
-    let _ = fs::remove_file(LATEST);
+    let _ = fs::remove_file(LATEST).ok();
 
     // Create symlink with just the filename (not full path)
     Command::new("ln")
         .arg("-s")
         .args([&filename_only, LATEST])
         .output()?;
+
+    println!("✓ Symlinked: {} to {}", filename, LATEST);
 
     Ok(())
 }
@@ -498,10 +535,7 @@ fn stream_with_grid_filter(
     let stringfmt = FourCC::new(&input.settings.format).to_string();
     let pixfmt = map.get(&stringfmt).unwrap().clone();
 
-    // Build ffmpeg command
-    let latest_photo = format!("{}/latest.bmp", PHOTO_DIR);
-
-    if (!Path::new(&latest_photo).exists()) {
+    if (!Path::new(&LATEST).exists()) {
         init_snapshot_latest(&input_path)?;
     }
 
@@ -524,10 +558,11 @@ fn stream_with_grid_filter(
     let mut ffmpeg = FfmpegCommand::new()
         .format("v4l2")
         // .pix_fmt(&pixfmt)
+        .args(["-input_format", "nv12"])
+        .args(["-video_size", "1920x1080"])
         .input(&input_path)
-        .input(&latest_photo)
-        // .args(["-input_format", "nv12"])
-        // .args(["-video_size", "1920x1080"])
+        .args(["-loop", "1"])
+        .input(&LATEST)
         .filter_complex(filter)
         // .args(["-filter_complex", &format!("\"{}\"", filter)])
         .args(["-fflags", "+genpts"])
@@ -536,7 +571,8 @@ fn stream_with_grid_filter(
         .codec_video("libx264")
         .args(["-tune", "zerolatency"])
         .preset("ultrafast")
-        .args(["-x264-params", "\"repeat-headers=1:bframes=0\""])
+        // .args(["-x264-params", "\"repeat-headers=1:bframes=0\""])
+        .args(["-x264-params", "repeat-headers=1:bframes=0"])
         .rate(24.0)
         .format("mpegts")
         .output(&output_path)
@@ -550,67 +586,17 @@ fn stream_with_grid_filter(
 
     println!("FFmpeg process started");
 
-    thread::sleep(Duration::from_secs(5));
-
     s.send(Message::Start)?;
     println!("Grid configuration: 3 columns × 4 rows in pink color");
 
-    thread::sleep(Duration::from_secs(5));
-
     // Monitor ffmpeg events
-    let iter = ffmpeg.iter()?;
-    for event in iter {
-        // Check for trigger files
-        if Path::new(TRIGGER_CAPTURE).exists() {
-            fs::remove_file(TRIGGER_CAPTURE)?;
-            println!("\n📸 Capture triggered");
-
-            ffmpeg.kill()?;
-
-            thread::sleep(Duration::from_millis(5000));
-
-            if let Err(e) = capture_photo() {
-                eprintln!("Capture failed: {}", e);
-            }
-
-            // Restart ffplay after capture
-            return Ok(true);
-        }
-
-        if Path::new(TRIGGER_DELETION).exists() {
-            fs::remove_file(TRIGGER_DELETION)?;
-            println!("\n🗑️  Delete triggered");
-            if let Err(e) = delete_latest_photo() {
-                eprintln!("Delete failed: {}", e);
-            }
-            return Ok(true);
-        }
-
-        if Path::new(TRIGGER_PLAYBACK).exists() {
-            fs::remove_file(TRIGGER_PLAYBACK)?;
-            println!("\n🎬 Playback triggered");
-            // Kill current stream for playback
-            ffmpeg.kill()?;
-            // ffplay.kill()?;
-
-            if let Err(e) = create_playback(&output_path) {
-                eprintln!("Playback failed: {}", e);
-            }
-
-            // Break to restart stream
-            return Ok(true);
-        }
-
+    for event in ffmpeg.iter()? {
         if !running.load(Ordering::SeqCst) {
-            ffmpeg.kill()?;
+            println!("Grid configuration: 3 columns × 4 rows in pink color");
             s.send(Message::Stop)?;
+            ffmpeg.kill()?;
             return Ok(false);
         }
-        // Velse if let Some(result) = ffplay.try_wait()? {
-        //     println!("{}", result.to_string());
-        //     ffmpeg.kill()?;
-        //     return Ok(false);
-        // }
 
         match event {
             FfmpegEvent::Log(LogLevel::Info, msg) => {
