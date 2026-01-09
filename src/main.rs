@@ -542,28 +542,14 @@ fn stream_with_grid_filter(
 
     let onion_opacity = 0.55;
     let onion_filter = format!("blend=all_mode=normal:all_opacity={}", onion_opacity);
-    //
+
     let filter = [
-        "[0:v]hue=s=0,scale=1920:1080[mirror]",
+        "[0:v]hue=s=0,scale=1920:1080[cam]",
         "[1:v]scale=1920:1080[latest]",
-        &format!("[mirror][latest]{}[mux]", onion_filter),
-        "[mux]split=2[stream][snapshot]",
+        "[cam]split=2[snapshot][mirror]",
+        &format!("[mirror][latest]{}[stream]", onion_filter),
     ]
     .join(";");
-
-    // let filter = [
-    //     "[0:v]hue=s=0,scale=1920:1080[cam]",
-    //     "[1:v]scale=1920:1080[latest]",
-    //     "[cam]split=2[snapshot][mirror]",
-    //     &format!("[mirror][latest]{}[stream]", onion_filter),
-    //     // "[mux]split=2[stream][snapshot]",
-    // ]
-    // .join(";");
-
-    //   ffmpeg -i /dev/video3 \
-    // -filter_complex "[0:v]split=2[stream][snap]" \
-    // -map "[stream]" -r 24 -c:v libx264 -preset ultrafast -tune zerolatency -g 24 -x264-params "repeat-headers=1:bframes=0" -f mpegts udp://127.0.0.1:8090 \
-    // -map "[snap]" -r 1 -update 1 snapshot.png
 
     let mut ffmpeg = FfmpegCommand::new()
         .format("v4l2")
@@ -571,22 +557,18 @@ fn stream_with_grid_filter(
         .args(["-input_format", "nv12"])
         .args(["-video_size", "1920x1080"])
         .input(&input_path)
-        // .args(["-stream_loop", "1"])
         .arg("-re")
         .arg("-y")
         .args(["-loop", "1"])
         .args(["-f", "image2"])
-        // .args(["-framerate", "5"])
         .input(&LATEST)
         .filter_complex(filter)
-        // .args(["-filter_complex", &format!("\"{}\"", filter)])
         .args(["-fflags", "+genpts"])
         .args(["-use_wallclock_as_timestamps", "1"])
         .map("[stream]")
         .codec_video("libx264")
         .args(["-tune", "zerolatency"])
         .preset("ultrafast")
-        // .args(["-x264-params", "\"repeat-headers=1:bframes=0\""])
         .args(["-x264-params", "repeat-headers=1:bframes=0"])
         .rate(24.0)
         .format("mpegts")
