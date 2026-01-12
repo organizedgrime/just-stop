@@ -5,7 +5,6 @@ use ffmpeg_sidecar::{
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,6 +13,10 @@ use std::time::Duration;
 use std::{
     fs::{self, File},
     io::Write,
+};
+use std::{
+    os::unix::fs::FileTypeExt,
+    path::{Path, PathBuf},
 };
 use v4l::{capability::Flags, v4l2};
 use v4l::{video::Capture, Device, FourCC};
@@ -27,17 +30,17 @@ use crate::{
 use conf::stream::*;
 use conf::*;
 
-// Trigger file paths
-const TMPDIR: &str = "/tmp/just_stop";
-const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
-const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
-const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
-const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
-pub const NOTIFICATION_FILE: &str = "/tmp/just_stop/notification.txt";
-// const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
-const PHOTO_DIR: &str = "./photos";
-const LATEST: &str = "./photos/latest.bmp";
-const FILE_PREFIX: &str = "photo";
+// // Trigger file paths
+// const TMPDIR: &str = "/tmp/just_stop";
+// const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
+// const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
+// const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
+// const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
+// pub const NOTIFICATION_FILE: &str = "/tmp/just_stop/notification.txt";
+// // const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
+// const PHOTO_DIR: &str = "./photos";
+// const LATEST: &str = "./photos/latest.bmp";
+// const FILE_PREFIX: &str = "photo";
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {
     let nodes = v4l::context::enum_devices();
@@ -159,15 +162,6 @@ enum Message {
     Stop,
 }
 
-fn notify(message: &str) -> Result<()> {
-    let path = Path::new(NOTIFICATION_FILE).to_path_buf();
-    let mut file = File::create(&path)?;
-    file.write_all(message.as_bytes())?;
-    thread::sleep(Duration::from_millis(333));
-    file.flush()?;
-    Ok(())
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure config directory exists
     Conf::setup()?;
@@ -228,10 +222,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let file_manager = FileManager::new("photos", "./photos", "/tmp/just-stop")?;
+    let (latest, snapshot, notification) = (
+        file_manager.latest(),
+        file_manager.snapshot(),
+        file_manager.notification(),
+    );
+
     // Create necessary directories
-    fs::create_dir_all(TMPDIR)?;
-    fs::File::create(Path::new(NOTIFICATION_FILE))?;
-    fs::create_dir_all(PHOTO_DIR)?;
+    // fs::create_dir_all(TMPDIR)?;
+    // fs::File::create(Path::new(NOTIFICATION_FILE))?;
+    // fs::create_dir_all(PHOTO_DIR)?;
 
     println!("Press Ctrl+C to stop the stream");
 
@@ -250,47 +251,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut ffplay_pid: Option<u32> = None;
         loop {
             println!("loop repeats");
-            File::create(&Path::new(NOTIFICATION_FILE)).expect("clear notification");
+            // File::create(&Path::new(NOTIFICATION_FILE)).expect("clear notification");
 
             if r.is_empty() {
                 // Check for trigger files
-                if Path::new(TRIGGER_CAPTURE).exists() {
-                    fs::remove_file(TRIGGER_CAPTURE).unwrap();
-                    println!("\n📸 Capture triggered");
-
-                    // ffmpeg.kill()?;
-
-                    // thread::sleep(Duration::from_millis(5000));
-
-                    if let Err(e) = capture_photo() {
-                        eprintln!("Capture failed: {}", e);
-                    }
-
-                    notify("capture").unwrap();
-
-                    // Restart ffplay after capture
-                    // return Ok(true);
-                }
-
-                if Path::new(TRIGGER_DELETION).exists() {
-                    fs::remove_file(TRIGGER_DELETION).unwrap();
-                    println!("\n🗑️  Delete triggered");
-                    if let Err(e) = delete_latest_photo() {
-                        eprintln!("Delete failed: {}", e);
-                    }
-                    notify("delete").unwrap();
-                }
-
-                if Path::new(TRIGGER_PLAYBACK).exists() {
-                    fs::remove_file(TRIGGER_PLAYBACK).unwrap();
-                    println!("\n🎬 Playback triggered");
-                    // notify("playback").unwrap();
-                    // if let Err(e) = create_playback(&output_path) {
-                    //     eprintln!("Playback failed: {}", e);
-                    // }
-                    //
-                    // Break to restart stream
-                }
+                file_manager.monitor_triggers().unwrap();
             } else {
                 match r.recv() {
                     Ok(message) => {
@@ -326,7 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // Cleanup
-                            fs::remove_dir_all(TMPDIR).ok();
+                            fs::remove_dir_all(&file_manager.tmp).ok();
 
                             println!("Stream ended gracefully");
                         }
@@ -352,14 +317,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // // Start the streaming loop
     let mut restart = true;
     while restart {
-        restart = stream_with_grid_filter(&config, running.clone(), &s)?;
+        restart = stream_with_grid_filter(
+            &config,
+            running.clone(),
+            &s,
+            &latest,
+            &snapshot,
+            &notification,
+        )?;
     }
 
     // thread::sleep(Duration::from_secs(5));
 
     // mirror_process.kill()?;
     s.send(Message::Stop)?;
-    fs::remove_dir_all(TMPDIR).ok();
+    // file_manager.cleanup()?;
     Command::new("pkill").arg("ffplay").output().ok();
 
     println!("the program is now over");
@@ -394,190 +366,187 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(ffmpeg)
 } */
 
-fn get_latest_photo() -> Option<PathBuf> {
-    fs::read_dir(PHOTO_DIR)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            !entry
-                .path()
-                .file_name()
-                .and_then(|path| path.to_str())
-                .map(|path| path.contains("latest.bmp"))
-                .unwrap_or(false)
-                && entry
-                    .path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext == "bmp")
-                    .unwrap_or(false)
-        })
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            let modified = metadata.modified().ok()?;
-            Some((entry.path(), modified))
-        })
-        .max_by_key(|(_, modified)| *modified)
-        .map(|(path, _)| path)
-}
+// fn get_latest_photo() -> Option<PathBuf> {
+//     fs::read_dir(PHOTO_DIR)
+//         .ok()?
+//         .filter_map(|entry| entry.ok())
+//         .filter(|entry| {
+//             entry
+//                 .path()
+//                 .extension()
+//                 .and_then(|ext| ext.to_str())
+//                 .map(|ext| ext == "bmp")
+//                 .unwrap_or(false)
+//         })
+//         .filter_map(|entry| {
+//             let metadata = entry.metadata().ok()?;
+//             let modified = metadata.modified().ok()?;
+//             Some((entry.path(), modified))
+//         })
+//         .max_by_key(|(_, modified)| *modified)
+//         .map(|(path, _)| path)
+// }
+//
+// fn get_photo_count() -> usize {
+//     fs::read_dir(PHOTO_DIR)
+//         .map(|entries| {
+//             entries
+//                 .filter_map(|entry| entry.ok())
+//                 .filter(|entry| {
+//                     entry
+//                         .path()
+//                         .extension()
+//                         .and_then(|ext| ext.to_str())
+//                         .map(|ext| ext == "bmp")
+//                         .unwrap_or(false)
+//                 })
+//                 .count()
+//         })
+//         .unwrap_or(0)
+// }
 
-fn get_photo_count() -> usize {
-    fs::read_dir(PHOTO_DIR)
-        .map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .filter(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "bmp")
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
+// fn symlink_latest() -> Result<()> {
+//     if let Some(latest) = get_latest_photo() {
+//         // Create symlink with just the filename (not full path)
+//         Command::new("ln")
+//             .arg("-sf")
+//             .args([
+//                 &latest
+//                     .file_name()
+//                     .ok_or(anyhow!("no file name"))?
+//                     .to_str()
+//                     .ok_or(anyhow!("no file name"))?,
+//                 LATEST,
+//             ])
+//             .output()?;
+//
+//         println!("✓ Symlinked: {:?} to {}", latest, LATEST);
+//     }
+//     Ok(())
+// }
 
-fn symlink_latest() -> Result<()> {
-    if let Some(latest) = get_latest_photo() {
-        // Create symlink with just the filename (not full path)
-        Command::new("ln")
-            .arg("-sf")
-            .args([
-                &latest
-                    .file_name()
-                    .ok_or(anyhow!("no file name"))?
-                    .to_str()
-                    .ok_or(anyhow!("no file name"))?,
-                LATEST,
-            ])
-            .output()?;
+// fn capture_photo() -> Result<()> {
+//     let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
+//     let count = get_photo_count();
+//     let filename_only = format!("{}_{:03}_{}.bmp", FILE_PREFIX, count, timestamp);
+//     let filename = format!("{}/{}", PHOTO_DIR, filename_only);
+//
+//     println!("Capturing photo to {}...", filename);
+//
+//     // Copy the snapshot we already have saved over to the new file name
+//     Command::new("cp").arg(SNAPSHOT).arg(&filename).output()?;
+//
+//     // if output.status.success() {
+//     println!("✓ Captured: {}", filename);
+//
+//     // Remove old symlink if it exists
+//     let _ = fs::remove_file(LATEST).ok();
+//
+//     // Create symlink with just the filename (not full path)
+//     symlink_latest()?;
+//
+//     Ok(())
+// }
+//
+// fn delete_latest_photo() -> Result<()> {
+//     if let Some(latest) = get_latest_photo() {
+//         println!("Deleting {}...", latest.display());
+//         fs::remove_file(&latest)?;
+//         println!("✓ Deleted");
+//         symlink_latest()?;
+//         Ok(())
+//     } else {
+//         anyhow::bail!("No photos to delete")
+//     }
+// }
 
-        println!("✓ Symlinked: {:?} to {}", latest, LATEST);
-    }
-    Ok(())
-}
+// fn create_playback(output_device: &str) -> Result<()> {
+//     let playback_file = format!("{}/playback.mp4", TMPDIR);
+//
+//     // Remove old playback file if it exists
+//     if Path::new(&playback_file).exists() {
+//         fs::remove_file(&playback_file)?;
+//     }
+//
+//     println!("Creating playback video...");
+//
+//     let pattern = format!("{}/*.bmp", PHOTO_DIR);
+//
+//     // Create the video from photos
+//     let output = Command::new("ffmpeg")
+//         .args(["-framerate", "12"])
+//         .args(["-pattern_type", "glob"])
+//         .args(["-i", &pattern])
+//         .args([
+//             "-filter_complex",
+//             "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]",
+//         ])
+//         .args(["-map", "[output]"])
+//         .args(["-c:v", "libx264"])
+//         .args(["-y", &playback_file])
+//         .output()?;
+//
+//     if !output.status.success() {
+//         anyhow::bail!(
+//             "Failed to create playback: {}",
+//             String::from_utf8_lossy(&output.stderr)
+//         )
+//     }
+//
+//     println!("Playing back video...");
+//
+//     // Play the video to the output device
+//     let output = Command::new("ffmpeg")
+//         .args(["-re"])
+//         .args(["-i", &playback_file])
+//         .args(["-f", "mpegts"])
+//         .arg(output_device)
+//         .output()?;
+//
+//     if output.status.success() {
+//         println!("✓ Playback complete");
+//         Ok(())
+//     } else {
+//         anyhow::bail!(
+//             "Failed to play video: {}",
+//             String::from_utf8_lossy(&output.stderr)
+//         )
+//     }
+// }
 
-fn capture_photo() -> Result<()> {
-    let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
-    let count = get_photo_count();
-    let filename_only = format!("{}_{:03}_{}.bmp", FILE_PREFIX, count, timestamp);
-    let filename = format!("{}/{}", PHOTO_DIR, filename_only);
-
-    println!("Capturing photo to {}...", filename);
-
-    // Copy the snapshot we already have saved over to the new file name
-    Command::new("cp").arg(SNAPSHOT).arg(&filename).output()?;
-
-    // if output.status.success() {
-    println!("✓ Captured: {}", filename);
-
-    // Remove old symlink if it exists
-    let _ = fs::remove_file(LATEST).ok();
-
-    // Create symlink with just the filename (not full path)
-    symlink_latest()?;
-
-    Ok(())
-}
-
-fn delete_latest_photo() -> Result<()> {
-    if let Some(latest) = get_latest_photo() {
-        println!("Deleting {}...", latest.display());
-        fs::remove_file(&latest)?;
-        println!("✓ Deleted");
-        symlink_latest()?;
-        Ok(())
-    } else {
-        anyhow::bail!("No photos to delete")
-    }
-}
-
-fn create_playback(output_device: &str) -> Result<()> {
-    let playback_file = format!("{}/playback.mp4", TMPDIR);
-
-    // Remove old playback file if it exists
-    if Path::new(&playback_file).exists() {
-        fs::remove_file(&playback_file)?;
-    }
-
-    println!("Creating playback video...");
-
-    let pattern = format!("{}/*.bmp", PHOTO_DIR);
-
-    // Create the video from photos
-    let output = Command::new("ffmpeg")
-        .args(["-framerate", "12"])
-        .args(["-pattern_type", "glob"])
-        .args(["-i", &pattern])
-        .args([
-            "-filter_complex",
-            "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]",
-        ])
-        .args(["-map", "[output]"])
-        .args(["-c:v", "libx264"])
-        .args(["-y", &playback_file])
-        .output()?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "Failed to create playback: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    }
-
-    println!("Playing back video...");
-
-    // Play the video to the output device
-    let output = Command::new("ffmpeg")
-        .args(["-re"])
-        .args(["-i", &playback_file])
-        .args(["-f", "v4l2"])
-        .arg(output_device)
-        .output()?;
-
-    if output.status.success() {
-        println!("✓ Playback complete");
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "Failed to play video: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    }
-}
-
-fn init_snapshot_latest(input_path: &str) -> Result<()> {
-    // If we don't yet have a snapshot (starting up the program)
-    // Kick off a dedicated image captrure
-    if !Path::new(&SNAPSHOT).exists() {
-        FfmpegCommand::new()
-            .format("v4l2")
-            .input(&input_path)
-            .filter_complex("[0:v]hue=s=0,scale=1920:1080[output]")
-            .rate(5.0)
-            .args(["-lossless", "1"])
-            .args(["-frames:v", "1"])
-            .arg("-y")
-            .map("[output]")
-            .output(SNAPSHOT)
-            .print_command()
-            .spawn()?
-            .wait()?;
-
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    capture_photo()?;
-
-    Ok(())
-}
+// fn init_snapshot_latest(input_path: &str) -> Result<()> {
+//     // If we don't yet have a snapshot (starting up the program)
+//     // Kick off a dedicated image captrure
+//     if !Path::new(&SNAPSHOT).exists() {
+//         FfmpegCommand::new()
+//             .format("v4l2")
+//             .input(&input_path)
+//             .filter_complex("[0:v]hue=s=0,scale=1920:1080[output]")
+//             .rate(5.0)
+//             .args(["-lossless", "1"])
+//             .args(["-frames:v", "1"])
+//             .arg("-y")
+//             .map("[output]")
+//             .output(SNAPSHOT)
+//             .print_command()
+//             .spawn()?
+//             .wait()?;
+//
+//         thread::sleep(Duration::from_millis(100));
+//     }
+//
+//     capture_photo()?;
+//
+//     Ok(())
+// }
 
 fn stream_with_grid_filter(
     config: &Conf,
     running: Arc<AtomicBool>,
     s: &Sender<Message>,
+    latest: &str,
+    snapshot: &str,
+    notification: &str,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
 
@@ -598,14 +567,14 @@ fn stream_with_grid_filter(
     let stringfmt = FourCC::new(&input.settings.format).to_string();
     let pixfmt = map.get(&stringfmt).unwrap().clone();
 
-    if get_latest_photo().is_none() {
-        println!("initializing latest.bmp");
-        init_snapshot_latest(&input_path)?;
-    } else {
-        println!("already initialized snapshot.bmp");
-        symlink_latest()?;
-        println!("initialized symlink");
-    }
+    // if get_latest_photo().is_none() {
+    //     println!("initializing latest.bmp");
+    //     init_snapshot_latest(&input_path)?;
+    // } else {
+    //     println!("already initialized snapshot.bmp");
+    //     symlink_latest()?;
+    //     println!("initialized symlink");
+    // }
 
     let mut ffmpeg = FfmpegCommand::new()
         .format("v4l2")
@@ -615,11 +584,11 @@ fn stream_with_grid_filter(
         // .args(["-framerate", &framerate])
         .input(&input_path)
         .arg("-re")
-        .arg("-y")
+        // .arg("-y")
         .args(["-loop", "1"])
         .args(["-f", "image2"])
-        .input(&LATEST)
-        .filter_complex(effects.filter_complex())
+        .input(latest)
+        .filter_complex(effects.filter_complex(notification))
         .args(["-fflags", "+genpts"])
         .args(["-use_wallclock_as_timestamps", "1"])
         .map("[output]")
@@ -634,7 +603,7 @@ fn stream_with_grid_filter(
         .rate(1.0)
         .args(["-update", "1"])
         .arg("-y")
-        .output(SNAPSHOT)
+        .output(snapshot)
         .print_command()
         .spawn()?;
 

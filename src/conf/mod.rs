@@ -12,9 +12,11 @@ use serde::Serialize;
 
 mod device;
 pub mod effects;
+mod files;
 
 pub mod stream;
 pub use device::*;
+pub use files::*;
 
 use effects::JustEffects;
 use stream::JustStream;

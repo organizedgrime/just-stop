@@ -1,4 +1,3 @@
-use crate::NOTIFICATION_FILE;
 use confique::Config;
 use serde::Serialize;
 
@@ -36,9 +35,9 @@ impl JustEffects {
         .join(";")
     }
 
-    pub fn filter_complex(&self) -> String {
+    pub fn filter_complex(&self, notification_file: &str) -> String {
         // Notification text for displaying messages
-        let notification_filter = format!("drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2", NOTIFICATION_FILE);
+        let notification_filter = format!("drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2", notification_file);
         // Grid overlay
         let grid_filter = self.grid.to_string();
         // Half sized
