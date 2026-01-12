@@ -11,10 +11,12 @@ use etcetera::{choose_base_strategy, BaseStrategy};
 use serde::Serialize;
 
 mod device;
-pub mod stream;
+pub mod effects;
 
+pub mod stream;
 pub use device::*;
 
+use effects::JustEffects;
 use stream::JustStream;
 
 const CONFIG_FILE: &str = "config.toml";
@@ -26,6 +28,9 @@ pub struct Conf {
 
     #[config(nested)]
     pub output: JustStream,
+
+    #[config(nested)]
+    pub effects: JustEffects,
 }
 
 impl Conf {

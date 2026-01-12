@@ -14,7 +14,12 @@
         # Install Neovim itself
         neovim
         # Install Rust toolchain and rust-analyzer
+
+        mold
         rustc
+        rustfmt
+        cmake
+
         cargo
         clang
         pkg-config

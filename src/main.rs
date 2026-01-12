@@ -17,7 +17,10 @@ use v4l::{video::Capture, Device, FourCC};
 mod conf;
 mod pixel;
 
-use crate::pixel::create_fourcc_to_ffmpeg_map_owned;
+use crate::{
+    conf::effects::{GridFilter, JustEffects},
+    pixel::create_fourcc_to_ffmpeg_map_owned,
+};
 use conf::stream::*;
 use conf::*;
 
@@ -27,6 +30,7 @@ const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
 const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
 const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
 const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
+pub const NOTIFICATION_FILE: &str = "/tmp/just_stop/notification.txt";
 // const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
 const PHOTO_DIR: &str = "./photos";
 const LATEST: &str = "./photos/latest.bmp";
@@ -47,6 +51,9 @@ fn discover_devices() -> Result<Vec<DeviceInfo>> {
                     driver: caps.driver,
                     capabilities: caps.capabilities.into(),
                 });
+            }
+            if let Ok(control) = device.query_controls() {
+                println!("{control:?}");
             }
         }
     }
@@ -178,8 +185,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tcp: false,
                 port: 8090,
             };
+            let effects = JustEffects {
+                grid: GridFilter {
+                    color: "0xFF0000".to_string(),
+                    rows: 9,
+                    cols: 16,
+                    opacity: 0.55,
+                },
+                advanced: false,
+                onion_opacity: 0.55,
+                hflip: false,
+                vflip: false,
+            };
 
-            let config = Conf { input, output };
+            let config = Conf {
+                input,
+                output,
+                effects,
+            };
 
             // Save the newly created config
             config.save()?;
@@ -195,6 +218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create necessary directories
     fs::create_dir_all(TMPDIR)?;
+    fs::File::create(Path::new(NOTIFICATION_FILE))?;
     fs::create_dir_all(PHOTO_DIR)?;
 
     println!("Press Ctrl+C to stop the stream");
@@ -207,8 +231,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         running_handler.store(false, Ordering::SeqCst);
     })?;
     let (s, r) = unbounded::<Message>();
-
-    // let mut mirror_process = start_mirror(&config)?;
 
     let output_path = config.output.to_string();
 
@@ -523,7 +545,11 @@ fn stream_with_grid_filter(
     let map = create_fourcc_to_ffmpeg_map_owned();
 
     println!("GOT THE MAP");
-    let Conf { input, output } = config;
+    let Conf {
+        input,
+        output,
+        effects,
+    } = config;
 
     // Clone paths for later use
     let input_path = input.info.path.clone();
@@ -543,13 +569,13 @@ fn stream_with_grid_filter(
     let onion_opacity = 0.55;
     let onion_filter = format!("blend=all_mode=normal:all_opacity={}", onion_opacity);
 
-    let filter = [
-        "[0:v]hue=s=0,scale=1920:1080[cam]",
-        "[1:v]scale=1920:1080[latest]",
-        "[cam]split=2[snapshot][mirror]",
-        &format!("[mirror][latest]{}[stream]", onion_filter),
-    ]
-    .join(";");
+    // let filter = [
+    //     "[0:v]hue=s=0,scale=1920:1080[cam]",
+    //     "[1:v]scale=1920:1080[latest]",
+    //     "[cam]split=2[snapshot][mirror]",
+    //     &format!("[mirror][latest]{}[stream]", onion_filter),
+    // ]
+    // .join(";");
 
     let mut ffmpeg = FfmpegCommand::new()
         .format("v4l2")
@@ -562,10 +588,10 @@ fn stream_with_grid_filter(
         .args(["-loop", "1"])
         .args(["-f", "image2"])
         .input(&LATEST)
-        .filter_complex(filter)
+        .filter_complex(effects.filter_complex())
         .args(["-fflags", "+genpts"])
         .args(["-use_wallclock_as_timestamps", "1"])
-        .map("[stream]")
+        .map("[output]")
         .codec_video("libx264")
         .args(["-tune", "zerolatency"])
         .preset("ultrafast")
