@@ -1,17 +1,20 @@
-use anyhow::{Context as _, Result};
+use anyhow::{anyhow, Context as _, Result};
 use crossbeam_channel::{unbounded, Sender};
 use ffmpeg_sidecar::{
     command::FfmpegCommand,
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::{
+    fs::{self, File},
+    io::Write,
+};
 use v4l::{capability::Flags, v4l2};
 use v4l::{video::Capture, Device, FourCC};
 mod conf;
@@ -156,6 +159,15 @@ enum Message {
     Stop,
 }
 
+fn notify(message: &str) -> Result<()> {
+    let path = Path::new(NOTIFICATION_FILE).to_path_buf();
+    let mut file = File::create(&path)?;
+    file.write_all(message.as_bytes())?;
+    thread::sleep(Duration::from_millis(333));
+    file.flush()?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure config directory exists
     Conf::setup()?;
@@ -238,6 +250,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut ffplay_pid: Option<u32> = None;
         loop {
             println!("loop repeats");
+            File::create(&Path::new(NOTIFICATION_FILE)).expect("clear notification");
+
             if r.is_empty() {
                 // Check for trigger files
                 if Path::new(TRIGGER_CAPTURE).exists() {
@@ -252,6 +266,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("Capture failed: {}", e);
                     }
 
+                    notify("capture").unwrap();
+
                     // Restart ffplay after capture
                     // return Ok(true);
                 }
@@ -262,12 +278,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = delete_latest_photo() {
                         eprintln!("Delete failed: {}", e);
                     }
+                    notify("delete").unwrap();
                 }
 
                 if Path::new(TRIGGER_PLAYBACK).exists() {
                     fs::remove_file(TRIGGER_PLAYBACK).unwrap();
                     println!("\n🎬 Playback triggered");
-
+                    // notify("playback").unwrap();
                     // if let Err(e) = create_playback(&output_path) {
                     //     eprintln!("Playback failed: {}", e);
                     // }
@@ -382,12 +399,18 @@ fn get_latest_photo() -> Option<PathBuf> {
         .ok()?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry
+            !entry
                 .path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext == "bmp")
+                .file_name()
+                .and_then(|path| path.to_str())
+                .map(|path| path.contains("latest.bmp"))
                 .unwrap_or(false)
+                && entry
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext == "bmp")
+                    .unwrap_or(false)
         })
         .filter_map(|entry| {
             let metadata = entry.metadata().ok()?;
@@ -416,6 +439,26 @@ fn get_photo_count() -> usize {
         .unwrap_or(0)
 }
 
+fn symlink_latest() -> Result<()> {
+    if let Some(latest) = get_latest_photo() {
+        // Create symlink with just the filename (not full path)
+        Command::new("ln")
+            .arg("-sf")
+            .args([
+                &latest
+                    .file_name()
+                    .ok_or(anyhow!("no file name"))?
+                    .to_str()
+                    .ok_or(anyhow!("no file name"))?,
+                LATEST,
+            ])
+            .output()?;
+
+        println!("✓ Symlinked: {:?} to {}", latest, LATEST);
+    }
+    Ok(())
+}
+
 fn capture_photo() -> Result<()> {
     let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
     let count = get_photo_count();
@@ -434,12 +477,7 @@ fn capture_photo() -> Result<()> {
     let _ = fs::remove_file(LATEST).ok();
 
     // Create symlink with just the filename (not full path)
-    Command::new("ln")
-        .arg("-s")
-        .args([&filename_only, LATEST])
-        .output()?;
-
-    println!("✓ Symlinked: {} to {}", filename, LATEST);
+    symlink_latest()?;
 
     Ok(())
 }
@@ -449,6 +487,7 @@ fn delete_latest_photo() -> Result<()> {
         println!("Deleting {}...", latest.display());
         fs::remove_file(&latest)?;
         println!("✓ Deleted");
+        symlink_latest()?;
         Ok(())
     } else {
         anyhow::bail!("No photos to delete")
@@ -563,25 +602,17 @@ fn stream_with_grid_filter(
         println!("initializing latest.bmp");
         init_snapshot_latest(&input_path)?;
     } else {
-        println!("already initialized latest.bmp");
+        println!("already initialized snapshot.bmp");
+        symlink_latest()?;
+        println!("initialized symlink");
     }
-
-    let onion_opacity = 0.55;
-    let onion_filter = format!("blend=all_mode=normal:all_opacity={}", onion_opacity);
-
-    // let filter = [
-    //     "[0:v]hue=s=0,scale=1920:1080[cam]",
-    //     "[1:v]scale=1920:1080[latest]",
-    //     "[cam]split=2[snapshot][mirror]",
-    //     &format!("[mirror][latest]{}[stream]", onion_filter),
-    // ]
-    // .join(";");
 
     let mut ffmpeg = FfmpegCommand::new()
         .format("v4l2")
         // .pix_fmt(&pixfmt)
         .args(["-input_format", "nv12"])
         .args(["-video_size", "1920x1080"])
+        // .args(["-framerate", &framerate])
         .input(&input_path)
         .arg("-re")
         .arg("-y")

@@ -72,7 +72,6 @@ impl JustEffects {
                     "[stream][latest]blend=all_mode=normal:all_opacity={}[mux]",
                     self.onion_opacity
                 ),
-                // format!("[mux]null[output]"),
                 // Add grid and notifications
                 format!("[mux]{},{}[output]", grid_filter, notification_filter),
             ]
