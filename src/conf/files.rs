@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::Message;
+use crate::{conf::effects::JustEffects, Message};
 
 #[derive(Clone)]
 pub struct FileManager {
@@ -82,6 +82,10 @@ impl FileManager {
 
     pub fn snapshot(&self) -> String {
         self.tmp("snapshot.bmp")
+    }
+
+    pub fn output(&self) -> String {
+        self.tmp("camera.socket")
     }
 
     pub fn capture_trigger(&self) -> String {
@@ -267,5 +271,40 @@ impl FileManager {
     pub fn cleanup(&self) -> Result<()> {
         remove_dir_all(&self.tmp)?;
         Ok(())
+    }
+
+    pub fn build_command(&self, input: &str, effects: &JustEffects) -> FfmpegCommand {
+        let mut command = FfmpegCommand::new();
+        command
+            .format("v4l2")
+            // .pix_fmt(&pixfmt)
+            .args(["-input_format", "nv12"])
+            .args(["-video_size", "1920x1080"])
+            // .args(["-framerate", &framerate])
+            .input(&input)
+            .arg("-re")
+            // .arg("-y")
+            .args(["-loop", "1"])
+            .args(["-f", "image2"])
+            .input(&self.latest())
+            .filter_complex(effects.filter_complex(&self.notification()))
+            .args(["-fflags", "+genpts"])
+            .args(["-use_wallclock_as_timestamps", "1"])
+            .map("[output]")
+            .codec_video("libx264")
+            .args(["-tune", "zerolatency"])
+            .preset("ultrafast")
+            .args(["-x264-params", "repeat-headers=1:bframes=0"])
+            .rate(24.0)
+            .format("mpegts")
+            .args(["-listen", "1"])
+            .output(&format!("unix:{}", self.output()))
+            .map("[snapshot]")
+            .rate(1.0)
+            .args(["-update", "1"])
+            .arg("-y")
+            .output(&self.snapshot())
+            .print_command();
+        command
     }
 }

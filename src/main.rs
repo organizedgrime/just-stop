@@ -5,7 +5,6 @@ use ffmpeg_sidecar::{
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -17,6 +16,10 @@ use std::{
 use std::{
     os::unix::fs::FileTypeExt,
     path::{Path, PathBuf},
+};
+use std::{
+    process::{Child, Command},
+    thread::sleep,
 };
 use v4l::{capability::Flags, v4l2};
 use v4l::{video::Capture, Device, FourCC};
@@ -223,16 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let file_manager = FileManager::new("photos", "./photos", "/tmp/just-stop")?;
-    let (latest, snapshot, notification) = (
-        file_manager.latest(),
-        file_manager.snapshot(),
-        file_manager.notification(),
-    );
-
-    // Create necessary directories
-    // fs::create_dir_all(TMPDIR)?;
-    // fs::File::create(Path::new(NOTIFICATION_FILE))?;
-    // fs::create_dir_all(PHOTO_DIR)?;
+    let mut command = file_manager.build_command(config.input.path(), &config.effects);
 
     println!("Press Ctrl+C to stop the stream");
 
@@ -245,7 +239,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let (s, r) = unbounded::<Message>();
 
-    let output_path = config.output.to_string();
+    let output_path = file_manager.output();
 
     thread::spawn(move || {
         let mut ffplay_pid: Option<u32> = None;
@@ -261,12 +255,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(message) => {
                         if message == Message::Start {
                             println!("Received Start message");
+                            while !Path::new(&output_path).exists() {
+                                println!("waiting");
+                                sleep(Duration::from_millis(333));
+                            }
                             let mut ffplay_cmd = Command::new("ffplay");
                             ffplay_cmd
                                 .args(["-fflags", "nobuffer"])
                                 .args(["-flags", "low_delay"])
                                 .arg("-framedrop")
-                                .arg(&output_path);
+                                .arg(&format!("unix:{}", output_path));
+
                             println!("ffplay cmd: {:?}", ffplay_cmd);
 
                             if ffplay_pid.is_some() {
@@ -317,14 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // // Start the streaming loop
     let mut restart = true;
     while restart {
-        restart = stream_with_grid_filter(
-            &config,
-            running.clone(),
-            &s,
-            &latest,
-            &snapshot,
-            &notification,
-        )?;
+        restart = stream(&config, running.clone(), &s, &mut command)?;
     }
 
     // thread::sleep(Duration::from_secs(5));
@@ -338,215 +330,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/* fn start_mirror(config: &Conf) -> Result<FfmpegChild> {
-    let Conf { input, output } = config;
-
-    let framerate = input.settings.ffmpeg_r();
-    let input_path = input.info.path.clone();
-    let output_path = output.info.path.clone();
-    let stringfmt = FourCC::new(&input.settings.format).to_string();
-    let map = create_fourcc_to_ffmpeg_map_owned();
-    let pixfmt = map.get(&stringfmt).unwrap().clone();
-
-    println!("starting ffmpeg mirror from {input_path} to {output_path}");
-    let ffmpeg = FfmpegCommand::new()
-        .args(["-f", "v4l2"]) // Force v4l2 for input
-        .args(["-r", &framerate]) // Input framerate
-        .input(&input_path)
-        .filter_complex(&"hue=s=0".to_string())
-        .args(["-f", "v4l2"])
-        .args(["-pix_fmt", &pixfmt])
-        .args(["-fflags", "+genpts"])
-        .args(["-use_wallclock_as_timestamps", "1"])
-        .output(&output_path)
-        .print_command()
-        .spawn()?;
-    println!("success");
-
-    Ok(ffmpeg)
-} */
-
-// fn get_latest_photo() -> Option<PathBuf> {
-//     fs::read_dir(PHOTO_DIR)
-//         .ok()?
-//         .filter_map(|entry| entry.ok())
-//         .filter(|entry| {
-//             entry
-//                 .path()
-//                 .extension()
-//                 .and_then(|ext| ext.to_str())
-//                 .map(|ext| ext == "bmp")
-//                 .unwrap_or(false)
-//         })
-//         .filter_map(|entry| {
-//             let metadata = entry.metadata().ok()?;
-//             let modified = metadata.modified().ok()?;
-//             Some((entry.path(), modified))
-//         })
-//         .max_by_key(|(_, modified)| *modified)
-//         .map(|(path, _)| path)
-// }
-//
-// fn get_photo_count() -> usize {
-//     fs::read_dir(PHOTO_DIR)
-//         .map(|entries| {
-//             entries
-//                 .filter_map(|entry| entry.ok())
-//                 .filter(|entry| {
-//                     entry
-//                         .path()
-//                         .extension()
-//                         .and_then(|ext| ext.to_str())
-//                         .map(|ext| ext == "bmp")
-//                         .unwrap_or(false)
-//                 })
-//                 .count()
-//         })
-//         .unwrap_or(0)
-// }
-
-// fn symlink_latest() -> Result<()> {
-//     if let Some(latest) = get_latest_photo() {
-//         // Create symlink with just the filename (not full path)
-//         Command::new("ln")
-//             .arg("-sf")
-//             .args([
-//                 &latest
-//                     .file_name()
-//                     .ok_or(anyhow!("no file name"))?
-//                     .to_str()
-//                     .ok_or(anyhow!("no file name"))?,
-//                 LATEST,
-//             ])
-//             .output()?;
-//
-//         println!("✓ Symlinked: {:?} to {}", latest, LATEST);
-//     }
-//     Ok(())
-// }
-
-// fn capture_photo() -> Result<()> {
-//     let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
-//     let count = get_photo_count();
-//     let filename_only = format!("{}_{:03}_{}.bmp", FILE_PREFIX, count, timestamp);
-//     let filename = format!("{}/{}", PHOTO_DIR, filename_only);
-//
-//     println!("Capturing photo to {}...", filename);
-//
-//     // Copy the snapshot we already have saved over to the new file name
-//     Command::new("cp").arg(SNAPSHOT).arg(&filename).output()?;
-//
-//     // if output.status.success() {
-//     println!("✓ Captured: {}", filename);
-//
-//     // Remove old symlink if it exists
-//     let _ = fs::remove_file(LATEST).ok();
-//
-//     // Create symlink with just the filename (not full path)
-//     symlink_latest()?;
-//
-//     Ok(())
-// }
-//
-// fn delete_latest_photo() -> Result<()> {
-//     if let Some(latest) = get_latest_photo() {
-//         println!("Deleting {}...", latest.display());
-//         fs::remove_file(&latest)?;
-//         println!("✓ Deleted");
-//         symlink_latest()?;
-//         Ok(())
-//     } else {
-//         anyhow::bail!("No photos to delete")
-//     }
-// }
-
-// fn create_playback(output_device: &str) -> Result<()> {
-//     let playback_file = format!("{}/playback.mp4", TMPDIR);
-//
-//     // Remove old playback file if it exists
-//     if Path::new(&playback_file).exists() {
-//         fs::remove_file(&playback_file)?;
-//     }
-//
-//     println!("Creating playback video...");
-//
-//     let pattern = format!("{}/*.bmp", PHOTO_DIR);
-//
-//     // Create the video from photos
-//     let output = Command::new("ffmpeg")
-//         .args(["-framerate", "12"])
-//         .args(["-pattern_type", "glob"])
-//         .args(["-i", &pattern])
-//         .args([
-//             "-filter_complex",
-//             "[0:v]fps=30,scale=height=ih:width=iw,format=yuv420p[output]",
-//         ])
-//         .args(["-map", "[output]"])
-//         .args(["-c:v", "libx264"])
-//         .args(["-y", &playback_file])
-//         .output()?;
-//
-//     if !output.status.success() {
-//         anyhow::bail!(
-//             "Failed to create playback: {}",
-//             String::from_utf8_lossy(&output.stderr)
-//         )
-//     }
-//
-//     println!("Playing back video...");
-//
-//     // Play the video to the output device
-//     let output = Command::new("ffmpeg")
-//         .args(["-re"])
-//         .args(["-i", &playback_file])
-//         .args(["-f", "mpegts"])
-//         .arg(output_device)
-//         .output()?;
-//
-//     if output.status.success() {
-//         println!("✓ Playback complete");
-//         Ok(())
-//     } else {
-//         anyhow::bail!(
-//             "Failed to play video: {}",
-//             String::from_utf8_lossy(&output.stderr)
-//         )
-//     }
-// }
-
-// fn init_snapshot_latest(input_path: &str) -> Result<()> {
-//     // If we don't yet have a snapshot (starting up the program)
-//     // Kick off a dedicated image captrure
-//     if !Path::new(&SNAPSHOT).exists() {
-//         FfmpegCommand::new()
-//             .format("v4l2")
-//             .input(&input_path)
-//             .filter_complex("[0:v]hue=s=0,scale=1920:1080[output]")
-//             .rate(5.0)
-//             .args(["-lossless", "1"])
-//             .args(["-frames:v", "1"])
-//             .arg("-y")
-//             .map("[output]")
-//             .output(SNAPSHOT)
-//             .print_command()
-//             .spawn()?
-//             .wait()?;
-//
-//         thread::sleep(Duration::from_millis(100));
-//     }
-//
-//     capture_photo()?;
-//
-//     Ok(())
-// }
-
-fn stream_with_grid_filter(
+fn stream(
     config: &Conf,
     running: Arc<AtomicBool>,
     s: &Sender<Message>,
-    latest: &str,
-    snapshot: &str,
-    notification: &str,
+    command: &mut FfmpegCommand,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     println!("Starting ffmpeg with grid filter...");
 
@@ -576,36 +364,7 @@ fn stream_with_grid_filter(
     //     println!("initialized symlink");
     // }
 
-    let mut ffmpeg = FfmpegCommand::new()
-        .format("v4l2")
-        // .pix_fmt(&pixfmt)
-        .args(["-input_format", "nv12"])
-        .args(["-video_size", "1920x1080"])
-        // .args(["-framerate", &framerate])
-        .input(&input_path)
-        .arg("-re")
-        // .arg("-y")
-        .args(["-loop", "1"])
-        .args(["-f", "image2"])
-        .input(latest)
-        .filter_complex(effects.filter_complex(notification))
-        .args(["-fflags", "+genpts"])
-        .args(["-use_wallclock_as_timestamps", "1"])
-        .map("[output]")
-        .codec_video("libx264")
-        .args(["-tune", "zerolatency"])
-        .preset("ultrafast")
-        .args(["-x264-params", "repeat-headers=1:bframes=0"])
-        .rate(24.0)
-        .format("mpegts")
-        .output(&output_path)
-        .map("[snapshot]")
-        .rate(1.0)
-        .args(["-update", "1"])
-        .arg("-y")
-        .output(snapshot)
-        .print_command()
-        .spawn()?;
+    let mut ffmpeg = command.spawn()?;
 
     println!("FFmpeg process started");
 
