@@ -35,7 +35,8 @@ impl FileManager {
             // Create a transparent image for the first snapshot
             FfmpegCommand::new()
                 .format("lavfi")
-                .input("color=black@0.0:s=1920x1080")
+                // .input("color=black@0.0:s=1920x1080")
+                .input("testsrc=duration=10")
                 .frames(1)
                 .pix_fmt("bgra")
                 .arg("-y")
@@ -80,12 +81,34 @@ impl FileManager {
         self.photos("latest.bmp")
     }
 
+    pub fn playback(&self) -> String {
+        self.photos("playback.mp4")
+    }
+
     pub fn snapshot(&self) -> String {
         self.tmp("snapshot.bmp")
     }
 
-    pub fn output(&self) -> String {
-        self.tmp("camera.socket")
+    pub fn output_is_ready(&self) -> bool {
+        Path::new(&self.output_socket_file()).exists()
+    }
+
+    pub fn output_socket(&self) -> String {
+        format!("unix:{}", self.output_socket_file())
+    }
+
+    pub fn output_socket_file(&self) -> String {
+        // String::from("/tmp/just-stop-camera.socket")
+        self.tmp("output.socket")
+    }
+
+    pub fn preview_socket(&self) -> String {
+        format!("unix:{}", self.preview_socket_file())
+    }
+
+    pub fn preview_socket_file(&self) -> String {
+        // String::from("/tmp/just-stop-preview.socket")
+        self.tmp("preview.socket")
     }
 
     pub fn capture_trigger(&self) -> String {
@@ -126,13 +149,55 @@ impl FileManager {
             remove_file(&self.playback_trigger())?;
             println!("\n🎬 Playback triggered");
 
-            // if let Err(e) = self.create_playback(&output_path) {
-            //     eprintln!("Playback failed: {}", e);
-            // }
+            if let Err(e) = self.create_playback() {
+                eprintln!("Failed to create playback file: {}", e);
+            }
+
+            //    ffmpeg -re -i "$PLAYBACK_FILE" -r "$vcam_fps" -pix_fmt yuv420p -f v4l2 "$device_v" &
+
+            FfmpegCommand::new()
+                .format("libx264")
+                .realtime()
+                // .rate(60.0)
+                .input(self.playback())
+                .output(self.preview_socket())
+                .spawn()?
+                .wait()?;
+        } else {
             //
-            // Break to restart stream
+            FfmpegCommand::new()
+                .format("lavfi")
+                // .input("color=c=black@0.0:s=1920x1080")
+                .args(["-fflags", "+genpts"])
+                .args(["-use_wallclock_as_timestamps", "1"])
+                .input("testsrc=duration=0.5@0.0:s=1920x1080")
+                .duration("0.5")
+                .format("mpegts")
+                .args(["-listen", "1"])
+                .output(self.preview_socket())
+                .print_command()
+                .spawn()?
+                .wait()?;
         }
 
+        Ok(())
+    }
+
+    pub fn create_playback(&self) -> Result<()> {
+        // Remove the file if it already exists
+        if Path::new(&self.playback()).exists() {
+            remove_file(Path::new(&self.playback()))?;
+        }
+
+        FfmpegCommand::new()
+            .args(["-framerate", "12"])
+            .args(["-pattern_type", "glob"])
+            .input(&self.photos(&format!("{}*.bmp", self.prefix)))
+            .codec_video("libx264")
+            .output(&self.playback())
+            .print_command()
+            .spawn()?
+            .wait()?;
         Ok(())
     }
 
@@ -298,7 +363,7 @@ impl FileManager {
             .rate(24.0)
             .format("mpegts")
             .args(["-listen", "1"])
-            .output(&format!("unix:{}", self.output()))
+            .output(&format!("unix:{}", self.output_socket_file()))
             .map("[snapshot]")
             .rate(1.0)
             .args(["-update", "1"])

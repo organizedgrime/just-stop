@@ -239,7 +239,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let (s, r) = unbounded::<Message>();
 
-    let output_path = file_manager.output();
+    let output_path = file_manager.output_socket_file();
+    let tmpdir = file_manager.tmp.clone();
 
     thread::spawn(move || {
         let mut ffplay_pid: Option<u32> = None;
@@ -259,12 +260,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("waiting");
                                 sleep(Duration::from_millis(333));
                             }
+
+                            // FFplay from the output socket
                             let mut ffplay_cmd = Command::new("ffplay");
                             ffplay_cmd
                                 .args(["-fflags", "nobuffer"])
                                 .args(["-flags", "low_delay"])
                                 .arg("-framedrop")
-                                .arg(&format!("unix:{}", output_path));
+                                .arg(file_manager.output_socket());
 
                             println!("ffplay cmd: {:?}", ffplay_cmd);
 
@@ -321,6 +324,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // thread::sleep(Duration::from_secs(5));
 
+    fs::remove_dir_all(tmpdir).ok();
     // mirror_process.kill()?;
     s.send(Message::Stop)?;
     // file_manager.cleanup()?;
