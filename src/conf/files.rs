@@ -114,13 +114,13 @@ impl FileManager {
     //     Path::new(&self.output_socket_file()).exists()
     // }
 
-    // pub fn output_socket(&self) -> String {
-    //     format!("unix:{}", self.output_socket_file())
-    // }
-    //
-    // pub fn output_socket_file(&self) -> String {
-    //     self.tmp("output.socket")
-    // }
+    pub fn output_socket(&self) -> String {
+        format!("unix:{}", self.output_socket_file())
+    }
+
+    pub fn output_socket_file(&self) -> String {
+        self.tmp("output.socket")
+    }
 
     // pub fn output_pipe(&self) -> String {
     //     "/tmp/output.pipe".to_string()
@@ -382,24 +382,64 @@ impl FileManager {
 
         //ffmpeg -re -f v4l2 -i /dev/video3 -loop 1 -i pink_overlay.png -filter_complex "[0:v][1:v]overlay=0:0,split=2[vpng][vudp];[vpng]fps=1[vpngout]" -map "[vpngout]" -f image2 -update 1 output.png -map "[vudp]" -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://127.0.0.1:5000
         // one more try
+        // command
+        //     .realtime()
+        //     .overwrite()
+        //     .format("v4l2")
+        //     .input(&input)
+        //     .args(["-loop", "1"])
+        //     .input(&self.preview())
+        //     .filter_complex("[0:v][1:v]overlay=0:0,split=2[vpng][vudp];[vpng]fps=1[vpngout]")
+        //     // .filter_complex("[0:v]split=2[vpng][cam];[1:v]null[preview];[cam][preview]overlay=0:0[vudp];[vpng]fps=1[vpngout]")
+        //     .map("[vpngout]")
+        //     .format("image2")
+        //     .args(["-update", "1"])
+        //     .output(self.snapshot())
+        //     .map("[vudp]")
+        //     .codec_video("libx264")
+        //     .preset("veryfast")
+        //     .args(["-tune", "zerolatency"])
+        //     .format("mpegts")
+        //     .output("-")
+        //     .args([
+        //         "|",
+        //         "ffplay",
+        //         "-fflags",
+        //         "nobuffer",
+        //         "-flags",
+        //         "low_delay",
+        //         "-",
+        //     ])
+        //     .print_command();
         command
-            .realtime()
             .format("v4l2")
+            // .pix_fmt(&pixfmt)
+            .args(["-input_format", "nv12"])
+            .args(["-video_size", "1920x1080"])
+            // .args(["-framerate", &framerate])
             .input(&input)
+            .arg("-re")
+            // .arg("-y")
             .args(["-loop", "1"])
-            .input(&self.preview())
-            .filter_complex("[0:v][1:v]overlay=0:0,split=2[vpng][vudp];[vpng]fps=1[vpngout]")
-            .map("[vpngout]")
-            .format("image2")
-            .args(["-update", "1"])
-            .overwrite()
-            .output(self.snapshot())
-            .map("[vudp]")
+            .args(["-f", "image2"])
+            .input(&self.latest())
+            .filter_complex(effects.filter_complex(&self))
+            .args(["-fflags", "+genpts"])
+            .args(["-use_wallclock_as_timestamps", "1"])
+            .map("[output]")
             .codec_video("libx264")
-            .preset("veryfast")
             .args(["-tune", "zerolatency"])
+            .preset("ultrafast")
+            .args(["-x264-params", "repeat-headers=1:bframes=0"])
+            .rate(24.0)
             .format("mpegts")
-            .output(&stream.to_string())
+            .args(["-listen", "1"])
+            .output(&format!("unix:{}", self.output_socket_file()))
+            .map("[snapshot]")
+            .rate(1.0)
+            .args(["-update", "1"])
+            .arg("-y")
+            .output(&self.snapshot())
             .print_command();
 
         // command

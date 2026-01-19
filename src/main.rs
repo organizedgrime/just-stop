@@ -231,8 +231,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let (s, r) = unbounded::<Message>();
 
-    // let output_path = file_manager.output_socket_file();
-    let output_path = config.output.to_string();
+    let output_path = file_manager.output_socket_file();
+    // let output_path = config.output.to_string();
     let tmpdir = file_manager.tmp.clone();
 
     thread::spawn(move || {
@@ -249,33 +249,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(message) => {
                         if message == Message::Start {
                             println!("Received Start message");
-                            // while !Path::new(&output_path).exists() {
-                            //     println!("waiting");
-                            //     sleep(Duration::from_millis(333));
-                            // }
+                            while !Path::new(&output_path).exists() {
+                                println!("waiting");
+                                sleep(Duration::from_millis(333));
+                            }
 
                             // FFplay from the output socket
                             // ffplay -f rawvideo -pixel_format yuv420p -video_size 1920x1080 -framerate 60 /tmp/output.pipe
                             let mut ffplay_cmd = Command::new("ffplay");
                             ffplay_cmd
-                                // .args(["-f", "mpegts"])
-                                // .args(["-framerate", "60"])
                                 .args(["-fflags", "nobuffer"])
                                 .args(["-flags", "low_delay"])
+                                .arg("-framedrop")
+                                .arg(&format!("unix:{}", output_path))
+                                // ffplay_cmd
+                                //     // .args(["-f", "mpegts"])
+                                //     // .args(["-framerate", "60"])
+                                //     .args(["-fflags", "nobuffer"])
+                                //     .args(["-flags", "low_delay"])
                                 // .arg("-framedrop")
                                 // .args(["-probesize", "32"])
                                 // // .args(["-"])
                                 // .args(["-analyzeduration", "0"])
                                 .stdout(Stdio::piped())
-                                .stderr(Stdio::piped())
-                                // .args(["-f", "rawvideo"])
-                                //
-                                // .args(["-pixel_format", "yuv420p"])
-                                // .args(["-video_size", "1920x1080"])
-                                // .arg(file_manager.output_socket());
-                                .arg(&output_path);
+                                .stderr(Stdio::piped());
+                            // .args(["-f", "rawvideo"])
+                            //
+                            // .args(["-pixel_format", "yuv420p"])
+                            // .args(["-video_size", "1920x1080"])
+                            // .arg(file_manager.output_socket());
+                            // .arg(&output_path);
 
-                            println!("ffplay cmd: {:?}", ffplay_cmd);
+                            // println!("ffplay cmd: {:?}", ffplay_cmd);
 
                             if ffplay_pid.is_some() {
                                 println!("already healthy");
