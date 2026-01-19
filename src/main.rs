@@ -5,18 +5,21 @@ use ffmpeg_sidecar::{
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::Duration;
 use std::{
     fs::{self, File},
     io::Write,
 };
+use std::{io::BufRead as _, thread};
+use std::{
+    io::BufReader,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use std::{
     os::unix::fs::FileTypeExt,
     path::{Path, PathBuf},
 };
+use std::{process::Stdio, sync::Arc};
 use std::{
     process::{Child, Command},
     thread::sleep,
@@ -255,16 +258,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // ffplay -f rawvideo -pixel_format yuv420p -video_size 1920x1080 -framerate 60 /tmp/output.pipe
                             let mut ffplay_cmd = Command::new("ffplay");
                             ffplay_cmd
+                                // .args(["-f", "mpegts"])
+                                // .args(["-framerate", "60"])
                                 .args(["-fflags", "nobuffer"])
                                 .args(["-flags", "low_delay"])
-                                .arg("-framedrop")
-                                .args(["-probesize", "32"])
-                                .args(["-analyzeduration", "0"])
+                                // .arg("-framedrop")
+                                // .args(["-probesize", "32"])
+                                // // .args(["-"])
+                                // .args(["-analyzeduration", "0"])
+                                .stdout(Stdio::piped())
+                                .stderr(Stdio::piped())
                                 // .args(["-f", "rawvideo"])
                                 //
                                 // .args(["-pixel_format", "yuv420p"])
                                 // .args(["-video_size", "1920x1080"])
-                                // .args(["-framerate", "60"])
                                 // .arg(file_manager.output_socket());
                                 .arg(&output_path);
 
@@ -272,9 +279,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             if ffplay_pid.is_some() {
                                 println!("already healthy");
-                            } else if let Ok(child) = ffplay_cmd.spawn() {
-                                println!("spawned ffplay");
+                            } else if let Ok(mut child) = ffplay_cmd.spawn() {
                                 ffplay_pid = Some(child.id());
+                                println!("spawned ffplay: ${ffplay_pid:?}");
+
+                                // Take ownership of stdout and stderr
+                                let stdout = child.stdout.take().unwrap();
+                                let stderr = child.stderr.take().unwrap();
+
+                                // Spawn thread for stdout logging
+                                std::thread::spawn(move || {
+                                    let reader = BufReader::new(stdout);
+                                    for line in reader.lines() {
+                                        if let Ok(line) = line {
+                                            println!("ffplay info: {}", line);
+                                        }
+                                    }
+                                });
+
+                                // Spawn thread for stderr logging
+                                std::thread::spawn(move || {
+                                    let reader = BufReader::new(stderr);
+                                    for line in reader.lines() {
+                                        if let Ok(line) = line {
+                                            eprintln!("ffplay error: {}", line);
+                                        }
+                                    }
+                                });
                             } else {
                                 println!("error occurred spawning ffplay");
                             }
@@ -318,6 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     println!("waiting for preview file to be generated");
     //     sleep(Duration::from_millis(333));
     // }
+    // s.send(Message::Start)?;
 
     // thread::sleep(Duration::from_secs(5));
     // // Start the streaming loop
@@ -390,25 +422,25 @@ fn stream(
 
         match event {
             FfmpegEvent::Log(LogLevel::Info, msg) => {
-                println!("FFmpeg info: {}", msg);
+                println!("ffmpeg info: {}", msg);
             }
             FfmpegEvent::Log(LogLevel::Warning, msg) => {
-                println!("FFmpeg warning: {}", msg);
+                println!("ffmpeg warning: {}", msg);
             }
             FfmpegEvent::Log(LogLevel::Error, msg) => {
-                eprintln!("FFmpeg error: {}", msg);
+                eprintln!("ffmpeg error: {}", msg);
             }
             FfmpegEvent::Progress(progress) => {
                 if progress.frame % 30 == 0 {
                     // Log every second at 30fps
                     println!(
-                        "Processed {} frames, time: {:.2}s",
+                        "ffmpeg Processed {} frames, time: {:.2}s",
                         progress.frame, progress.time
                     );
                 }
             }
             FfmpegEvent::LogEOF => {
-                println!("FFmpeg log ended");
+                println!("ffmpeg log ended");
                 break;
             }
             _ => {}
