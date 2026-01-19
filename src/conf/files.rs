@@ -9,7 +9,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{Message, conf::effects::JustEffects};
+use crate::{
+    Message,
+    conf::{effects::JustEffects, stream::JustStream},
+};
 
 #[derive(Clone)]
 pub struct FileManager {
@@ -55,11 +58,11 @@ impl FileManager {
             manager.symlink_latest()?;
         }
 
-        if Path::new(&manager.output_pipe()).exists() {
-            remove_file(manager.output_pipe())?;
-        }
-
-        Command::new("mkfifo").arg(manager.output_pipe()).output()?;
+        // if Path::new(&manager.output_pipe()).exists() {
+        //     remove_file(manager.output_pipe())?;
+        // }
+        //
+        // Command::new("mkfifo").arg(manager.output_pipe()).output()?;
 
         // // The symlink is already good to go
         // if manager.latest_photo().is_none() {
@@ -118,9 +121,9 @@ impl FileManager {
     //     self.tmp("output.socket")
     // }
 
-    pub fn output_pipe(&self) -> String {
-        "/tmp/output.pipe".to_string()
-    }
+    // pub fn output_pipe(&self) -> String {
+    //     "/tmp/output.pipe".to_string()
+    // }
 
     pub fn transparent(&self) -> String {
         self.photos("transparent.png")
@@ -345,17 +348,41 @@ impl FileManager {
         Ok(())
     }
 
-    pub fn build_command(&self, input: &str, effects: &JustEffects) -> FfmpegCommand {
+    pub fn build_command(
+        &self,
+        input: &str,
+        stream: &JustStream,
+        effects: &JustEffects,
+    ) -> FfmpegCommand {
         let mut command = FfmpegCommand::new();
         // ffmpeg -f v4l2 -i /dev/video3 -f rawvideo -pix_fmt yuv420p -y /tmp/output.pipe
-        //
+        // ffmpeg -f v4l2 -i /dev/video3   -f mpegts   -codec:v libx264 -preset ultrafast -tune zerolatency   -g 1   -bf 0   -fflags nobuffer   -flush_packets 1   udp://127.0.0.1:8090?pkt_size=1316
         command
             .format("v4l2")
             .input(&input)
-            .format("rawvideo")
-            .pix_fmt("yuv420p")
-            .overwrite()
-            .output(&self.output_pipe())
+            // .args(["-loop", "1"])
+            // .input(&self.latest())
+            // .args(["-loop", "1"])
+            // .input(&self.preview())
+            // .filter_complex(effects.filter_complex(&self))
+            // .map("[output]")
+            // .format("rawvideo")
+            .format("mpegts")
+            .codec_video("libx264")
+            .preset("ultrafast")
+            .args(["-tune", "zerolatency"])
+            .args(["-g", "1"])
+            .args(["-bf", "0"])
+            .args(["-fflags", "nobuffer"])
+            .args(["-flush_packets", "1"])
+            // .pix_fmt("yuv420p")
+            // .overwrite()
+            .output(&format!("{}?pkt_size=1316", stream.to_string()))
+            // .map("[snapshot]")
+            // .rate(1.0)
+            // .args(["-update", "1"])
+            // .overwrite()
+            // .output(&self.snapshot())
             .print_command();
         /* command
         .format("v4l2")
