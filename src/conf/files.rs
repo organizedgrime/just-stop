@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use crossbeam_channel::Receiver;
-use ffmpeg_sidecar::command::FfmpegCommand;
+use ffmpeg_sidecar::{command::FfmpegCommand, pipe_name};
 use std::{
     fs::{File, copy, create_dir_all, remove_dir_all, remove_file},
     io::Write,
@@ -33,7 +33,7 @@ impl FileManager {
         // Create a transparent image for the first snapshot
         FfmpegCommand::new()
             .format("lavfi")
-            // .input("color=c=pink:s=1920x1080,format=rgba,colorchannelmixer=aa=0.7")
+            // .input("color=c=pink:s=1920x1080,format=rgba,colorchannelmixer=aa=0.2")
             .input("color=c=black:s=1920x1080,format=rgba,colorchannelmixer=aa=0.0")
             .frames(1)
             // .pix_fmt("bgra")
@@ -49,13 +49,25 @@ impl FileManager {
         // it can start as a symlink to the transparent one
         Self::symlink(&manager.transparent(), &manager.preview())?;
 
-        // The symlink is already good to go
-        if manager.latest_photo().is_none() {
-            // Self::symlink(&manager.snapshot(), )
-            manager.capture_photo()?;
-        } else {
+        // If there are photos
+        if !manager.sorted_photos().is_empty() {
+            // Symlink the most recent
             manager.symlink_latest()?;
         }
+
+        if Path::new(&manager.output_pipe()).exists() {
+            remove_file(manager.output_pipe())?;
+        }
+
+        Command::new("mkfifo").arg(manager.output_pipe()).output()?;
+
+        // // The symlink is already good to go
+        // if manager.latest_photo().is_none() {
+        //     // Self::symlink(&manager.snapshot(), )
+        //     manager.capture_photo()?;
+        // } else {
+        //     manager.symlink_latest()?;
+        // }
 
         // if Path::new(&manager.latest()).exists() {
         //
@@ -90,25 +102,24 @@ impl FileManager {
         self.photos("latest.png")
     }
 
-    pub fn playback(&self) -> String {
-        self.photos("playback.mp4")
-    }
-
     pub fn snapshot(&self) -> String {
         self.tmp("snapshot.png")
     }
 
-    pub fn output_is_ready(&self) -> bool {
-        Path::new(&self.output_socket_file()).exists()
-    }
+    // pub fn output_is_ready(&self) -> bool {
+    //     Path::new(&self.output_socket_file()).exists()
+    // }
 
-    pub fn output_socket(&self) -> String {
-        format!("unix:{}", self.output_socket_file())
-    }
+    // pub fn output_socket(&self) -> String {
+    //     format!("unix:{}", self.output_socket_file())
+    // }
+    //
+    // pub fn output_socket_file(&self) -> String {
+    //     self.tmp("output.socket")
+    // }
 
-    pub fn output_socket_file(&self) -> String {
-        // String::from("/tmp/just-stop-camera.socket")
-        self.tmp("output.socket")
+    pub fn output_pipe(&self) -> String {
+        "/tmp/output.pipe".to_string()
     }
 
     pub fn transparent(&self) -> String {
@@ -128,7 +139,7 @@ impl FileManager {
     }
 
     pub fn playback_trigger(&self) -> String {
-        self.tmp("deletion.trigger")
+        self.tmp("playback.trigger")
     }
 
     pub fn monitor_triggers(&self) -> Result<()> {
@@ -154,7 +165,7 @@ impl FileManager {
         }
 
         if Path::new(&self.playback_trigger()).exists() {
-            // remove_file(&self.playback_trigger())?;
+            remove_file(&self.playback_trigger())?;
             println!("\n🎬 Playback triggered");
 
             for photo in self.sorted_photos() {
@@ -175,7 +186,7 @@ impl FileManager {
         Ok(())
     }
 
-    pub fn create_playback(&self) -> Result<()> {
+    /* pub fn create_playback(&self) -> Result<()> {
         // Remove the file if it already exists
         if Path::new(&self.playback()).exists() {
             remove_file(Path::new(&self.playback()))?;
@@ -191,7 +202,7 @@ impl FileManager {
             .spawn()?
             .wait()?;
         Ok(())
-    }
+    } */
 
     pub fn latest_photo(&self) -> Option<PathBuf> {
         std::fs::read_dir(&self.photos)
@@ -302,9 +313,6 @@ impl FileManager {
         // if output.status.success() {
         println!("✓ Captured: {}", filename);
 
-        // Remove old symlink if it exists
-        let _ = std::fs::remove_file(self.latest()).ok();
-
         // Create symlink with just the filename (not full path)
         self.symlink_latest()?;
 
@@ -339,40 +347,65 @@ impl FileManager {
 
     pub fn build_command(&self, input: &str, effects: &JustEffects) -> FfmpegCommand {
         let mut command = FfmpegCommand::new();
+        // ffmpeg -f v4l2 -i /dev/video3 -f rawvideo -pix_fmt yuv420p -y /tmp/output.pipe
+        //
         command
             .format("v4l2")
-            // .realtime()
-            // .pix_fmt(&pixfmt)
-            .args(["-input_format", "nv12"])
-            .args(["-video_size", "1920x1080"])
-            // .args(["-framerate", &framerate])
             .input(&input)
-            .realtime()
-            // .arg("-y")
-            .args(["-loop", "1"])
-            .args(["-f", "image2"])
-            .input(&self.latest())
-            .realtime()
-            // .args(["-video_size", "1920x1080"])
-            .input(&self.preview())
-            .filter_complex(effects.filter_complex(&self))
-            .args(["-fflags", "+genpts"])
-            .args(["-use_wallclock_as_timestamps", "1"])
-            .map("[output]")
-            .codec_video("libx264")
-            .args(["-tune", "zerolatency"])
-            .preset("ultrafast")
-            .args(["-x264-params", "repeat-headers=1:bframes=0"])
-            .rate(24.0)
-            .format("mpegts")
-            .args(["-listen", "1"])
-            .output(&format!("unix:{}", self.output_socket_file()))
-            .map("[snapshot]")
-            .rate(1.0)
-            .args(["-update", "1"])
-            .arg("-y")
-            .output(&self.snapshot())
+            .format("rawvideo")
+            .pix_fmt("yuv420p")
+            .overwrite()
+            .output(&self.output_pipe())
             .print_command();
+        /* command
+        .format("v4l2")
+        // .realtime()
+        // .pix_fmt(&pixfmt)
+        // .args(["-input_format", "nv12"])
+        // .args(["-video_size", "1920x1080"])
+        // .args(["-framerate", &framerate])
+        .input(&input)
+        // .realtime()
+        // .arg("-y")
+        // .args(["-loop", "1"])
+        // .args(["-f", "image2"])
+        .input(&self.latest())
+        // .realtime()
+        // .args(["-video_size", "1920x1080"])
+        // .args(["-loop", "1"])
+        // .rate(24.0)
+        // .args(["-loop", "1"])
+        // // .args(["-framerate", "24"])
+        // .args(["-f", "image2"])
+        .input(&self.preview())
+        .filter_complex(effects.filter_complex(&self))
+        // .args(["-fflags", "+genpts+nobuffer"])
+        // .args(["-flags", "lowdelay"])
+        // .args(["-probesize", "32"])
+        // .args(["-analyzeduration", "0"])
+        // .args(["-use_wallclock_as_timestamps", "1"])
+        .map("[output]")
+        // .codec_video("libx264")
+        // .args(["-tune", "zerolatency"])
+        // .args(["-bf", "0"])
+        // .args(["-g", "15"])
+        // .preset("ultrafast")
+        // .args(["-x264-params", "repeat-headers=1:bframes=0"])
+        // .rate(24.0)
+        // .format("mpegts")
+        // .args(["-listen", "1"])
+        // .output(&format!("unix:{}", self.output_socket_file()))
+        .format("rawvideo")
+        .pix_fmt("yuv420p")
+        .args(["-listen", "1"])
+        .output(&self.output_pipe())
+        // .output(&format!("unix:{}", self.output_socket_file()))
+        .map("[snapshot]")
+        .rate(1.0)
+        .args(["-update", "1"])
+        .arg("-y")
+        .output(&self.snapshot())
+        .print_command(); */
         command
     }
 }

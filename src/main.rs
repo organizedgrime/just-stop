@@ -227,8 +227,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let (s, r) = unbounded::<Message>();
 
-    let output_path = file_manager.output_socket_file();
-    // let preview_path = file_manager.preview_socket_file();
+    // let output_path = file_manager.output_socket_file();
+    let output_path = file_manager.output_pipe();
     let tmpdir = file_manager.tmp.clone();
 
     thread::spawn(move || {
@@ -251,12 +251,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             // FFplay from the output socket
+                            // ffplay -f rawvideo -pixel_format yuv420p -video_size 1920x1080 -framerate 60 /tmp/output.pipe
                             let mut ffplay_cmd = Command::new("ffplay");
                             ffplay_cmd
-                                .args(["-fflags", "nobuffer"])
-                                .args(["-flags", "low_delay"])
-                                .arg("-framedrop")
-                                .arg(file_manager.output_socket());
+                                // .args(["-fflags", "nobuffer"])
+                                // .args(["-flags", "low_delay"])
+                                .args(["-f", "rawvideo"])
+                                .args(["-pixel_format", "yuv420p"])
+                                .args(["-video_size", "1920x1080"])
+                                .args(["-framerate", "60"])
+                                // .arg("-framedrop")
+                                // .arg(file_manager.output_socket());
+                                .arg(file_manager.output_pipe());
 
                             println!("ffplay cmd: {:?}", ffplay_cmd);
 

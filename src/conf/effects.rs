@@ -31,6 +31,8 @@ impl JustEffects {
             ),
             // Latest
             "[1:v]scale=1920:1080[latest]",
+            // Preview
+            "[2:v]scale=1920:1080[preview]",
             // Split cam into snapshot and stream
             "[cam]split=2[snapshot][stream]",
         ]
@@ -39,7 +41,10 @@ impl JustEffects {
 
     pub fn filter_complex(&self, file_manager: &FileManager) -> String {
         // Notification text for displaying messages
-        let notification_filter = format!("drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2", file_manager.notification());
+        let notification_filter = format!(
+            "drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2",
+            file_manager.notification()
+        );
         // Grid overlay
         let grid_filter = self.grid.to_string();
         // Half sized
@@ -58,7 +63,7 @@ impl JustEffects {
                     self.onion_opacity
                 ),
                 // Preview
-                format!("[mux][2:v]overlay[preview_mux]"),
+                format!("[mux][preview]overlay[preview_mux]"),
                 // Stack thumbnails on top of each other
                 format!("[stream_thumb][latest_thumb]vstack=inputs=2[left_stack]"),
                 // Add grid and notifications to main view
@@ -76,7 +81,7 @@ impl JustEffects {
                     self.onion_opacity
                 ),
                 // Preview
-                format!("[mux][2:v]overlay[preview_mux]"),
+                format!("[mux][preview]overlay[preview_mux]"),
                 // Add grid and notifications
                 format!(
                     "[preview_mux]{},{}[output]",
