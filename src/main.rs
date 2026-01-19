@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Context as _, Result};
-use crossbeam_channel::{unbounded, Sender};
+use anyhow::{Context as _, Result, anyhow};
+use crossbeam_channel::{Sender, unbounded};
 use ffmpeg_sidecar::{
     command::FfmpegCommand,
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -21,8 +21,8 @@ use std::{
     process::{Child, Command},
     thread::sleep,
 };
+use v4l::{Device, FourCC, video::Capture};
 use v4l::{capability::Flags, v4l2};
-use v4l::{video::Capture, Device, FourCC};
 mod conf;
 mod pixel;
 
@@ -32,18 +32,6 @@ use crate::{
 };
 use conf::stream::*;
 use conf::*;
-
-// // Trigger file paths
-// const TMPDIR: &str = "/tmp/just_stop";
-// const TRIGGER_CAPTURE: &str = "/tmp/just_stop/capture.trigger";
-// const TRIGGER_DELETION: &str = "/tmp/just_stop/delete.trigger";
-// const TRIGGER_PLAYBACK: &str = "/tmp/just_stop/playback.trigger";
-// const SNAPSHOT: &str = "/tmp/just_stop/snapshot.bmp";
-// pub const NOTIFICATION_FILE: &str = "/tmp/just_stop/notification.txt";
-// // const SNAPSHOT: &str = "/home/vera/Pictures/snapshot.bmp";
-// const PHOTO_DIR: &str = "./photos";
-// const LATEST: &str = "./photos/latest.bmp";
-// const FILE_PREFIX: &str = "photo";
 
 fn discover_devices() -> Result<Vec<DeviceInfo>> {
     let nodes = v4l::context::enum_devices();
@@ -240,6 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (s, r) = unbounded::<Message>();
 
     let output_path = file_manager.output_socket_file();
+    // let preview_path = file_manager.preview_socket_file();
     let tmpdir = file_manager.tmp.clone();
 
     thread::spawn(move || {
@@ -315,6 +304,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     .arg(format!("v4l2://{}", &config.output.path()))
     //     .spawn()?;
     //
+    // while !Path::new(&preview_path).exists() {
+    //     println!("waiting for preview file to be generated");
+    //     sleep(Duration::from_millis(333));
+    // }
+
     // thread::sleep(Duration::from_secs(5));
     // // Start the streaming loop
     let mut restart = true;
@@ -360,10 +354,10 @@ fn stream(
     let pixfmt = map.get(&stringfmt).unwrap().clone();
 
     // if get_latest_photo().is_none() {
-    //     println!("initializing latest.bmp");
+    //     println!("initializing latest.png");
     //     init_snapshot_latest(&input_path)?;
     // } else {
-    //     println!("already initialized snapshot.bmp");
+    //     println!("already initialized snapshot.png");
     //     symlink_latest()?;
     //     println!("initialized symlink");
     // }

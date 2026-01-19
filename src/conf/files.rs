@@ -1,15 +1,15 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use crossbeam_channel::Receiver;
 use ffmpeg_sidecar::command::FfmpegCommand;
 use std::{
-    fs::{create_dir_all, remove_dir_all, remove_file, File},
+    fs::{File, copy, create_dir_all, remove_dir_all, remove_file},
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
-use crate::{conf::effects::JustEffects, Message};
+use crate::{Message, conf::effects::JustEffects};
 
 #[derive(Clone)]
 pub struct FileManager {
@@ -30,19 +30,29 @@ impl FileManager {
         create_dir_all(&manager.photos)?;
         File::create(&manager.notification())?;
 
-        // The symlink is already good to go
-        if manager.latest_photo().is_none() {
+        if !Path::new(&manager.transparent()).exists() {
             // Create a transparent image for the first snapshot
             FfmpegCommand::new()
                 .format("lavfi")
-                // .input("color=black@0.0:s=1920x1080")
-                .input("testsrc=duration=10")
+                .input("color=pink@0.5:s=1920x1080")
                 .frames(1)
                 .pix_fmt("bgra")
-                .arg("-y")
-                .output(manager.snapshot())
+                .overwrite()
+                .output(manager.transparent())
                 .spawn()?
                 .wait()?;
+        }
+
+        // Copy the transparent image to the snapshot
+        copy(manager.transparent(), &manager.snapshot())?;
+
+        // The preview file needs to be a symlink to another image,
+        // it can start as a symlink to the transparent one
+        Self::symlink(&manager.transparent(), &manager.preview());
+
+        // The symlink is already good to go
+        if manager.latest_photo().is_none() {
+            // Self::symlink(&manager.snapshot(), )
             manager.capture_photo()?;
         } else {
             manager.symlink_latest()?;
@@ -78,7 +88,7 @@ impl FileManager {
     }
 
     pub fn latest(&self) -> String {
-        self.photos("latest.bmp")
+        self.photos("latest.png")
     }
 
     pub fn playback(&self) -> String {
@@ -86,7 +96,7 @@ impl FileManager {
     }
 
     pub fn snapshot(&self) -> String {
-        self.tmp("snapshot.bmp")
+        self.tmp("snapshot.png")
     }
 
     pub fn output_is_ready(&self) -> bool {
@@ -102,13 +112,12 @@ impl FileManager {
         self.tmp("output.socket")
     }
 
-    pub fn preview_socket(&self) -> String {
-        format!("unix:{}", self.preview_socket_file())
+    pub fn transparent(&self) -> String {
+        self.photos("transparent.png")
     }
 
-    pub fn preview_socket_file(&self) -> String {
-        // String::from("/tmp/just-stop-preview.socket")
-        self.tmp("preview.socket")
+    pub fn preview(&self) -> String {
+        self.photos("preview.png")
     }
 
     pub fn capture_trigger(&self) -> String {
@@ -146,40 +155,24 @@ impl FileManager {
         }
 
         if Path::new(&self.playback_trigger()).exists() {
-            remove_file(&self.playback_trigger())?;
+            // remove_file(&self.playback_trigger())?;
             println!("\n🎬 Playback triggered");
 
-            if let Err(e) = self.create_playback() {
-                eprintln!("Failed to create playback file: {}", e);
+            for photo in self.sorted_photos() {
+                if let Some(file_name) = photo.file_name()
+                    && let Some(file_name) = file_name.to_str()
+                {
+                    // Link the file
+                    Self::symlink(file_name, &self.preview())?;
+
+                    // Wait for 1000/framerate millis
+                    std::thread::sleep(Duration::from_millis(1000 / 12));
+                }
             }
 
-            //    ffmpeg -re -i "$PLAYBACK_FILE" -r "$vcam_fps" -pix_fmt yuv420p -f v4l2 "$device_v" &
-
-            FfmpegCommand::new()
-                .format("libx264")
-                .realtime()
-                // .rate(60.0)
-                .input(self.playback())
-                .output(self.preview_socket())
-                .spawn()?
-                .wait()?;
-        } else {
-            //
-            FfmpegCommand::new()
-                .format("lavfi")
-                // .input("color=c=black@0.0:s=1920x1080")
-                .args(["-fflags", "+genpts"])
-                .args(["-use_wallclock_as_timestamps", "1"])
-                .input("testsrc=duration=0.5@0.0:s=1920x1080")
-                .duration("0.5")
-                .format("mpegts")
-                .args(["-listen", "1"])
-                .output(self.preview_socket())
-                .print_command()
-                .spawn()?
-                .wait()?;
+            // Once we're done, just make it transparent again
+            Self::symlink(&self.transparent(), &self.preview())?;
         }
-
         Ok(())
     }
 
@@ -192,7 +185,7 @@ impl FileManager {
         FfmpegCommand::new()
             .args(["-framerate", "12"])
             .args(["-pattern_type", "glob"])
-            .input(&self.photos(&format!("{}*.bmp", self.prefix)))
+            .input(&self.photos(&format!("{}*.png", self.prefix)))
             .codec_video("libx264")
             .output(&self.playback())
             .print_command()
@@ -219,7 +212,7 @@ impl FileManager {
             })
             .filter_map(|(path, modified, typ)| {
                 if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
-                    if ext == "bmp" && !typ.is_symlink() {
+                    if ext == "png" && !typ.is_symlink() {
                         return Some((path, modified));
                     }
                 }
@@ -227,6 +220,28 @@ impl FileManager {
             })
             .max_by_key(|(_, modified)| *modified)
             .map(|(path, _)| path)
+    }
+
+    pub fn sorted_photos(&self) -> Vec<PathBuf> {
+        let mut files: Vec<(PathBuf, SystemTime)> = vec![];
+
+        if let Ok(results) = std::fs::read_dir(&self.photos) {
+            for entry in results.filter_map(|entry| entry.ok()) {
+                let path = entry.path();
+                if let Ok(metadata) = path.metadata()
+                    && let Ok(modified) = metadata.modified()
+                    && let Ok(file_type) = entry.file_type()
+                    && let Some(ext) = path.extension()
+                    && ext == "png"
+                    && !file_type.is_symlink()
+                {
+                    files.push((path, modified));
+                }
+            }
+            files.sort_by_key(|(_, modified)| *modified);
+        }
+
+        return files.into_iter().map(|(path, _)| path).collect();
     }
 
     fn photo_count(&self) -> usize {
@@ -239,7 +254,7 @@ impl FileManager {
                             .path()
                             .extension()
                             .and_then(|ext| ext.to_str())
-                            .map(|ext| ext == "bmp")
+                            .map(|ext| ext == "png")
                             .unwrap_or(false)
                     })
                     .count()
@@ -247,49 +262,34 @@ impl FileManager {
             .unwrap_or(0)
     }
 
-    // fn symlink(&self) -> Result<()> {
-    //         // Create symlink with just the filename (not full path)
-    //         Command::new("ln")
-    //             .arg("-sf")
-    //             .args([
-    //                 latest
-    //                     .file_name()
-    //                     .ok_or(anyhow!("no file name"))?
-    //                     .to_str()
-    //                     .ok_or(anyhow!("no file name"))?,
-    //                 &self.latest(),
-    //             ])
-    //             .output()?;
-    //
-    //         println!("✓ Symlinked: {:?} to {}", latest, self.latest());
-    //     }
-    //     Ok(())
-    // }
+    fn symlink(file: &str, link: &str) -> Result<()> {
+        // TODO: consider compat with other non-local files
+        let file_name = file.split("/").last().unwrap_or(file);
+        Command::new("ln")
+            .arg("-sf")
+            .args([file_name, link])
+            .output()?;
+        println!("✓ Symlinked: {:?} to {}", file_name, link);
+        Ok(())
+    }
 
     fn symlink_latest(&self) -> Result<()> {
-        if let Some(latest) = self.latest_photo() {
+        if let Some(latest) = self.latest_photo()
+            && let Some(file_name) = latest.file_name()
+            && let Some(file_name) = file_name.to_str()
+        {
             // Create symlink with just the filename (not full path)
-            Command::new("ln")
-                .arg("-sf")
-                .args([
-                    latest
-                        .file_name()
-                        .ok_or(anyhow!("no file name"))?
-                        .to_str()
-                        .ok_or(anyhow!("no file name"))?,
-                    &self.latest(),
-                ])
-                .output()?;
-
-            println!("✓ Symlinked: {:?} to {}", latest, self.latest());
+            Self::symlink(file_name, &self.latest())?;
+            Ok(())
+        } else {
+            Err(anyhow!("unable to symlink latest"))
         }
-        Ok(())
     }
 
     fn capture_photo(&self) -> Result<()> {
         let timestamp = chrono::Local::now().format("%Y_%m_%d_%H_%M_%S");
         let count = self.photo_count();
-        let filename_only = format!("{}_{:03}_{}.bmp", self.prefix, count, timestamp);
+        let filename_only = format!("{}_{:03}_{}.png", self.prefix, count, timestamp);
         let filename = self.photos(&filename_only);
 
         println!("Capturing photo to {}...", filename);
@@ -342,17 +342,21 @@ impl FileManager {
         let mut command = FfmpegCommand::new();
         command
             .format("v4l2")
+            // .realtime()
             // .pix_fmt(&pixfmt)
             .args(["-input_format", "nv12"])
             .args(["-video_size", "1920x1080"])
             // .args(["-framerate", &framerate])
             .input(&input)
-            .arg("-re")
+            .realtime()
             // .arg("-y")
             .args(["-loop", "1"])
             .args(["-f", "image2"])
             .input(&self.latest())
-            .filter_complex(effects.filter_complex(&self.notification()))
+            .realtime()
+            // .args(["-video_size", "1920x1080"])
+            .input(&self.preview())
+            .filter_complex(effects.filter_complex(&self))
             .args(["-fflags", "+genpts"])
             .args(["-use_wallclock_as_timestamps", "1"])
             .map("[output]")

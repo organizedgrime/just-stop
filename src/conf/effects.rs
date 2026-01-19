@@ -1,6 +1,8 @@
 use confique::Config;
 use serde::Serialize;
 
+use crate::conf::FileManager;
+
 #[derive(Serialize, Config)]
 pub struct JustEffects {
     pub advanced: bool,
@@ -35,9 +37,9 @@ impl JustEffects {
         .join(";")
     }
 
-    pub fn filter_complex(&self, notification_file: &str) -> String {
+    pub fn filter_complex(&self, file_manager: &FileManager) -> String {
         // Notification text for displaying messages
-        let notification_filter = format!("drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2", notification_file);
+        let notification_filter = format!("drawtext=textfile={}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2", file_manager.notification());
         // Grid overlay
         let grid_filter = self.grid.to_string();
         // Half sized
@@ -55,10 +57,12 @@ impl JustEffects {
                     "[stream1][latest1]blend=all_mode=normal:all_opacity={}[mux]",
                     self.onion_opacity
                 ),
+                // Preview
+                format!("[mux][2:v]overlay[preview_mux]"),
                 // Stack thumbnails on top of each other
                 format!("[stream_thumb][latest_thumb]vstack=inputs=2[left_stack]"),
                 // Add grid and notifications to main view
-                format!("[mux]{},{}[main]", grid_filter, notification_filter),
+                format!("[preview_mux]{},{}[main]", grid_filter, notification_filter),
                 // Stack thumbnail and main view
                 format!("[left_stack][main]hstack=inputs=2[output]"),
             ]
@@ -71,8 +75,13 @@ impl JustEffects {
                     "[stream][latest]blend=all_mode=normal:all_opacity={}[mux]",
                     self.onion_opacity
                 ),
+                // Preview
+                format!("[mux][2:v]overlay[preview_mux]"),
                 // Add grid and notifications
-                format!("[mux]{},{}[output]", grid_filter, notification_filter),
+                format!(
+                    "[preview_mux]{},{}[output]",
+                    grid_filter, notification_filter
+                ),
             ]
             .join(";")
         }
