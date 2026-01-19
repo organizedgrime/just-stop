@@ -30,25 +30,24 @@ impl FileManager {
         create_dir_all(&manager.photos)?;
         File::create(&manager.notification())?;
 
-        if !Path::new(&manager.transparent()).exists() {
-            // Create a transparent image for the first snapshot
-            FfmpegCommand::new()
-                .format("lavfi")
-                .input("color=pink@0.5:s=1920x1080")
-                .frames(1)
-                .pix_fmt("bgra")
-                .overwrite()
-                .output(manager.transparent())
-                .spawn()?
-                .wait()?;
-        }
+        // Create a transparent image for the first snapshot
+        FfmpegCommand::new()
+            .format("lavfi")
+            // .input("color=c=pink:s=1920x1080,format=rgba,colorchannelmixer=aa=0.7")
+            .input("color=c=black:s=1920x1080,format=rgba,colorchannelmixer=aa=0.0")
+            .frames(1)
+            // .pix_fmt("bgra")
+            .overwrite()
+            .output(manager.transparent())
+            .spawn()?
+            .wait()?;
 
         // Copy the transparent image to the snapshot
         copy(manager.transparent(), &manager.snapshot())?;
 
         // The preview file needs to be a symlink to another image,
         // it can start as a symlink to the transparent one
-        Self::symlink(&manager.transparent(), &manager.preview());
+        Self::symlink(&manager.transparent(), &manager.preview())?;
 
         // The symlink is already good to go
         if manager.latest_photo().is_none() {
