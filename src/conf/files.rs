@@ -36,8 +36,8 @@ impl FileManager {
         // Create a transparent image for the first snapshot
         FfmpegCommand::new()
             .format("lavfi")
-            .input("color=c=pink:s=1920x1080,format=rgba,colorchannelmixer=aa=0.2")
-            // .input("color=c=black:s=1920x1080,format=rgba,colorchannelmixer=aa=0.0")
+            // .input("color=c=pink:s=1920x1080,format=rgba,colorchannelmixer=aa=0.2")
+            .input("color=c=black:s=1920x1080,format=rgba,colorchannelmixer=aa=0.0")
             .frames(1)
             // .pix_fmt("bgra")
             .overwrite()
@@ -107,20 +107,19 @@ impl FileManager {
 
     pub fn snapshot(&self) -> String {
         self.tmp("snapshot.png")
-        // "output.png".to_string()
     }
 
     // pub fn output_is_ready(&self) -> bool {
     //     Path::new(&self.output_socket_file()).exists()
     // }
 
-    pub fn output_socket(&self) -> String {
-        format!("unix:{}", self.output_socket_file())
-    }
-
-    pub fn output_socket_file(&self) -> String {
-        self.tmp("output.socket")
-    }
+    // pub fn output_socket(&self) -> String {
+    //     format!("unix:{}", self.output_socket_file())
+    // }
+    //
+    // pub fn output_socket_file(&self) -> String {
+    //     self.tmp("output.socket")
+    // }
 
     // pub fn output_pipe(&self) -> String {
     //     "/tmp/output.pipe".to_string()
@@ -358,131 +357,33 @@ impl FileManager {
         let mut command = FfmpegCommand::new();
         // ffmpeg -f v4l2 -i /dev/video3 -f rawvideo -pix_fmt yuv420p -y /tmp/output.pipe
         // ffmpeg -f v4l2 -i /dev/video3   -f mpegts   -codec:v libx264 -preset ultrafast -tune zerolatency   -g 1   -bf 0   -fflags nobuffer   -flush_packets 1   udp://127.0.0.1:8090?pkt_size=1316
-        // ffmpeg
-        //  -f v4l2
-        //  -i /dev/video3
-        //  -i ./photos/latest.png
-        //  -i ./photos/preview.png
-        //  -filter_complex "[0:v]split=2[snapshot][cam];[cam][2:v]overlay[overlay];[overlay][1:v]hstack[output];[snapshot]fps=1[snap1fps]"
-        //  -map [output]
-        //      -c:v libx264
-        //      -preset:v ultrafast
-        //      -tune zerolatency
-        //      -g 1
-        //      -bf 0
-        //      -fflags nobuffer
-        //      -flush_packets 1
-        //      -f mpegts
-        //      udp://127.0.0.1:8090?pkt_size=1316
-        //  -map [snap1fps]
-        //      -update 1
-        //      -y /tmp/just-stop/snapshot.png
-        //
-        // ffmpeg -f v4l2 -i /dev/video3 -i ./photos/latest.png -i ./photos/preview.png -filter_complex "[0:v]split=2[snapshot][cam];[cam][2:v]overlay[overlay];[overlay][1:v]hstack[output];[snapshot]fps=1[snap1fps]" -map [output] -c:v libx264 -preset:v ultrafast -tune zerolatency -g 1 -bf 0 -fflags nobuffer -flush_packets 1 -f mpegts udp://127.0.0.1:8090?pkt_size=1316 -map [snap1fps] -update 1 -y /tmp/just-stop/snapshot.png
-
-        //ffmpeg -re -f v4l2 -i /dev/video3 -loop 1 -i pink_overlay.png -filter_complex "[0:v][1:v]overlay=0:0,split=2[vpng][vudp];[vpng]fps=1[vpngout]" -map "[vpngout]" -f image2 -update 1 output.png -map "[vudp]" -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://127.0.0.1:5000
-        // one more try
-        // command
-        //     .realtime()
-        //     .overwrite()
-        //     .format("v4l2")
-        //     .input(&input)
-        //     .args(["-loop", "1"])
-        //     .input(&self.preview())
-        //     .filter_complex("[0:v][1:v]overlay=0:0,split=2[vpng][vudp];[vpng]fps=1[vpngout]")
-        //     // .filter_complex("[0:v]split=2[vpng][cam];[1:v]null[preview];[cam][preview]overlay=0:0[vudp];[vpng]fps=1[vpngout]")
-        //     .map("[vpngout]")
-        //     .format("image2")
-        //     .args(["-update", "1"])
-        //     .output(self.snapshot())
-        //     .map("[vudp]")
-        //     .codec_video("libx264")
-        //     .preset("veryfast")
-        //     .args(["-tune", "zerolatency"])
-        //     .format("mpegts")
-        //     .output("-")
-        //     .args([
-        //         "|",
-        //         "ffplay",
-        //         "-fflags",
-        //         "nobuffer",
-        //         "-flags",
-        //         "low_delay",
-        //         "-",
-        //     ])
-        //     .print_command();
         command
             .format("v4l2")
-            // .pix_fmt(&pixfmt)
-            .args(["-input_format", "nv12"])
-            .args(["-video_size", "1920x1080"])
-            // .args(["-framerate", &framerate])
             .input(&input)
-            .arg("-re")
-            // .arg("-y")
-            .args(["-loop", "1"])
-            .args(["-f", "image2"])
-            .input(&self.latest())
-            .filter_complex(effects.filter_complex(&self))
-            .args(["-fflags", "+genpts"])
-            .args(["-use_wallclock_as_timestamps", "1"])
-            .map("[output]")
-            .codec_video("libx264")
-            .args(["-tune", "zerolatency"])
-            .preset("ultrafast")
-            .args(["-x264-params", "repeat-headers=1:bframes=0"])
-            .rate(24.0)
+            // .args(["-loop", "1"])
+            // .input(&self.latest())
+            // .args(["-loop", "1"])
+            // .input(&self.preview())
+            // .filter_complex(effects.filter_complex(&self))
+            // .map("[output]")
+            // .format("rawvideo")
             .format("mpegts")
-            .args(["-listen", "1"])
-            .output(&format!("unix:{}", self.output_socket_file()))
-            .map("[snapshot]")
-            .rate(1.0)
-            .args(["-update", "1"])
-            .arg("-y")
-            .output(&self.snapshot())
+            .codec_video("libx264")
+            .preset("ultrafast")
+            .args(["-tune", "zerolatency"])
+            .args(["-g", "1"])
+            .args(["-bf", "0"])
+            .args(["-fflags", "nobuffer"])
+            .args(["-flush_packets", "1"])
+            // .pix_fmt("yuv420p")
+            // .overwrite()
+            .output(&format!("{}?pkt_size=1316", stream.to_string()))
+            // .map("[snapshot]")
+            // .rate(1.0)
+            // .args(["-update", "1"])
+            // .overwrite()
+            // .output(&self.snapshot())
             .print_command();
-
-        // command
-        //     .format("v4l2")
-        //
-        //     .args(["-framerate", "60"])
-        //     .input(&input)
-        //     .input(&self.latest())
-        //     .input(&self.preview())
-        //     // .filter_complex("[0:v][2:v]overlay[mux];[mux][1:v]hstack[output]")
-        //     .filter_complex("[0:v]split=2[snapshot][cam];[cam][2:v]overlay[overlay];[overlay][1:v]hstack[output];[snapshot]fps=1[snap1fps]")
-        //     // .filter_complex("[0:v]split=2[snapshot][cam];[snapshot]fps=1[snapped];[cam][2:v]overlay[overlay];[overlay][1:v]hstack[output]")
-        //     // .args(["-loop", "1"])
-        //     // .input(&self.preview())
-        //     // .filter_complex(effects.filter_complex(&self))
-        //     .map("[output]")
-        //     // .format("rawvideo")
-        //     // .args(["-c:v:0", "libx264"])
-        //     .codec_video("libx264")
-        //             // .args(["-x264-params", "repeat-headers=1:bframes=0"])
-        //
-        //     // .args(["-preset:v:0", "ultrafast"])
-        //     .preset("ultrafast")
-        //     .args(["-tune", "zerolatency"])
-        //     .args(["-g", "1"])
-        //     .args(["-bf", "0"])
-        //     .args(["-fflags", "nobuffer"])
-        //     .args(["-flush_packets", "1"])
-        //     // .format("mpegts")
-        //     // .output(&format!("{}?pkt_size=1316", stream.to_string()))
-        //     .args(["-f", "mpegts", &format!("{}?pkt_size=1316", stream.to_string())])
-        //     // .pix_fmt("yuv420p")
-        //     // .overwrite()
-        //     // .output(&format!("{}?pkt_size=1316", stream.to_string()))
-        //     .map("[snap1fps]")
-        //     // .args(["-c", "png"])
-        //     // .codec_video("png")
-        //     // .args(["-r:v:1", "1"])
-        //     .args(["-update", "1"])
-        //     .args(["-y", &self.snapshot()])
-        //     // .overwrite()
-        //     // .output(&self.snapshot())
-        //     .print_command();
         /* command
         .format("v4l2")
         // .realtime()
