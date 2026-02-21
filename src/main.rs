@@ -235,7 +235,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn(move || {
         let mut ffplay_pid: Option<u32> = None;
         loop {
-            println!("loop repeats");
+            // println!("loop repeats");
             // File::create(&Path::new(NOTIFICATION_FILE)).expect("clear notification");
 
             if r.is_empty() {
@@ -377,12 +377,10 @@ fn stream(
     println!("FFmpeg process started");
 
     s.send(Message::Start)?;
-    println!("Grid configuration: 3 columns × 4 rows in pink color");
 
     // Monitor ffmpeg events
     for event in ffmpeg.iter()? {
         if !running.load(Ordering::SeqCst) {
-            println!("Grid configuration: 3 columns × 4 rows in pink color");
             s.send(Message::Stop)?;
             ffmpeg.kill()?;
             return Ok(false);

@@ -31,8 +31,8 @@ impl JustEffects {
             ),
             // Latest
             "[1:v]scale=1920:1080[latest]",
-            // Preview
-            "[2:v]scale=1920:1080[preview]",
+            // // Preview
+            // "[2:v]scale=1920:1080[preview]",
             // Split cam into snapshot and stream
             "[cam]split=2[snapshot][stream]",
         ]
@@ -62,12 +62,12 @@ impl JustEffects {
                     "[stream1][latest1]blend=all_mode=normal:all_opacity={}[mux]",
                     self.onion_opacity
                 ),
-                // Preview
-                format!("[mux][preview]overlay[preview_mux]"),
+                // // Preview
+                // format!("[mux][preview]overlay[preview_mux]"),
                 // Stack thumbnails on top of each other
                 format!("[stream_thumb][latest_thumb]vstack=inputs=2[left_stack]"),
                 // Add grid and notifications to main view
-                format!("[preview_mux]{},{}[main]", grid_filter, notification_filter),
+                format!("[mux]{},{}[main]", grid_filter, notification_filter),
                 // Stack thumbnail and main view
                 format!("[left_stack][main]hstack=inputs=2[output]"),
             ]
@@ -80,13 +80,10 @@ impl JustEffects {
                     "[stream][latest]blend=all_mode=normal:all_opacity={}[mux]",
                     self.onion_opacity
                 ),
-                // Preview
-                format!("[mux][preview]overlay[preview_mux]"),
+                // // Preview
+                // format!("[mux][preview]overlay[preview_mux]"),
                 // Add grid and notifications
-                format!(
-                    "[preview_mux]{},{}[output]",
-                    grid_filter, notification_filter
-                ),
+                format!("[mux]{},{}[output]", grid_filter, notification_filter),
             ]
             .join(";")
         }

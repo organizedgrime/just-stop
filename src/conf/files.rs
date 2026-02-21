@@ -48,9 +48,9 @@ impl FileManager {
         // Copy the transparent image to the snapshot
         copy(manager.transparent(), &manager.snapshot())?;
 
-        // The preview file needs to be a symlink to another image,
-        // it can start as a symlink to the transparent one
-        Self::symlink(&manager.transparent(), &manager.preview())?;
+        // // The preview file needs to be a symlink to another image,
+        // // it can start as a symlink to the transparent one
+        // Self::symlink(&manager.transparent(), &manager.preview())?;
 
         // If there are photos
         if !manager.sorted_photos().is_empty() {
@@ -64,7 +64,7 @@ impl FileManager {
         //
         // Command::new("mkfifo").arg(manager.output_pipe()).output()?;
 
-        // // The symlink is already good to go
+        // The symlink is already good to go
         // if manager.latest_photo().is_none() {
         //     // Self::symlink(&manager.snapshot(), )
         //     manager.capture_photo()?;
@@ -101,10 +101,12 @@ impl FileManager {
         self.tmp("notification.txt")
     }
 
+    /// The most recent snapshot that we chose to save
     pub fn latest(&self) -> String {
         self.photos("latest.png")
     }
 
+    /// The photo we take once per second
     pub fn snapshot(&self) -> String {
         self.tmp("snapshot.png")
     }
@@ -129,9 +131,9 @@ impl FileManager {
         self.photos("transparent.png")
     }
 
-    pub fn preview(&self) -> String {
+    /* pub fn preview(&self) -> String {
         self.photos("preview.png")
-    }
+    } */
 
     pub fn capture_trigger(&self) -> String {
         self.tmp("capture.trigger")
@@ -171,20 +173,21 @@ impl FileManager {
             remove_file(&self.playback_trigger())?;
             println!("\n🎬 Playback triggered");
 
-            for photo in self.sorted_photos() {
+            // TODO: rethink playback strategy
+            /* for photo in self.sorted_photos() {
                 if let Some(file_name) = photo.file_name()
                     && let Some(file_name) = file_name.to_str()
                 {
-                    // Link the file
-                    Self::symlink(file_name, &self.preview())?;
+                    // // Link the file
+                    // Self::symlink(file_name, &self.preview())?;
 
                     // Wait for 1000/framerate millis
                     std::thread::sleep(Duration::from_millis(1000 / 12));
                 }
-            }
+            } */
 
             // Once we're done, just make it transparent again
-            Self::symlink(&self.transparent(), &self.preview())?;
+            // Self::symlink(&self.transparent(), &self.preview())?;
         }
         Ok(())
     }
@@ -225,7 +228,14 @@ impl FileManager {
             })
             .filter_map(|(path, modified, typ)| {
                 if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
-                    if ext == "png" && !typ.is_symlink() {
+                    if ext == "png"
+                        && !typ.is_symlink()
+                        && path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .contains(&self.prefix)
+                    {
                         return Some((path, modified));
                     }
                 }
@@ -358,14 +368,19 @@ impl FileManager {
         // ffmpeg -f v4l2 -i /dev/video3 -f rawvideo -pix_fmt yuv420p -y /tmp/output.pipe
         // ffmpeg -f v4l2 -i /dev/video3   -f mpegts   -codec:v libx264 -preset ultrafast -tune zerolatency   -g 1   -bf 0   -fflags nobuffer   -flush_packets 1   udp://127.0.0.1:8090?pkt_size=1316
         command
+            // .args(["-fflags", "+genpts+nobuffer"])
+            // .args(["-fflags", "+discardcorrupt"])
+            .args(["-use_wallclock_as_timestamps", "1"])
             .format("v4l2")
             .input(&input)
+            .args(["-loop", "1"])
+            .input(&self.latest())
             // .args(["-loop", "1"])
-            // .input(&self.latest())
+            // .input(&self.snapshot())
             // .args(["-loop", "1"])
             // .input(&self.preview())
-            // .filter_complex(effects.filter_complex(&self))
-            // .map("[output]")
+            .filter_complex(effects.filter_complex(&self))
+            .map("[output]")
             // .format("rawvideo")
             .format("mpegts")
             .codec_video("libx264")
@@ -373,16 +388,18 @@ impl FileManager {
             .args(["-tune", "zerolatency"])
             .args(["-g", "1"])
             .args(["-bf", "0"])
-            .args(["-fflags", "nobuffer"])
+            // .args(["-fflags", "+genpts+nobuffer"])
+            // .args(["-fflags", "nobuffer"])
             .args(["-flush_packets", "1"])
             // .pix_fmt("yuv420p")
             // .overwrite()
+            .args(["-use_wallclock_as_timestamps", "1"])
             .output(&format!("{}?pkt_size=1316", stream.to_string()))
-            // .map("[snapshot]")
-            // .rate(1.0)
-            // .args(["-update", "1"])
-            // .overwrite()
-            // .output(&self.snapshot())
+            .map("[snapshot]")
+            .rate(1.0)
+            .args(["-update", "1"])
+            .overwrite()
+            .output(&self.snapshot())
             .print_command();
         /* command
         .format("v4l2")
