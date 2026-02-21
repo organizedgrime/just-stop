@@ -2,10 +2,10 @@ use anyhow::{Result, anyhow};
 use crossbeam_channel::Receiver;
 use ffmpeg_sidecar::{command::FfmpegCommand, pipe_name};
 use std::{
-    fs::{File, copy, create_dir_all, remove_dir_all, remove_file},
+    fs::{self, File, copy, create_dir_all, remove_dir_all, remove_file},
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{Duration, SystemTime},
 };
 
@@ -62,7 +62,6 @@ impl FileManager {
         //     remove_file(manager.output_pipe())?;
         // }
         //
-        // Command::new("mkfifo").arg(manager.output_pipe()).output()?;
 
         // The symlink is already good to go
         // if manager.latest_photo().is_none() {
@@ -104,6 +103,11 @@ impl FileManager {
     /// The most recent snapshot that we chose to save
     pub fn latest(&self) -> String {
         self.photos("latest.png")
+    }
+
+    /// Pipe
+    pub fn latest_pipe(&self) -> String {
+        "/tmp/latest-pipe".to_string()
     }
 
     /// The photo we take once per second
@@ -191,6 +195,46 @@ impl FileManager {
         }
         Ok(())
     }
+
+    /* pub fn pipe_latest(&self) -> Result<()> {
+        // Command::new("mkfifo").arg(self.output_pipe()).output()?;
+        // let pipe_path = "/tmp/latest-pipe";
+
+        // Remove existing pipe if it exists
+        if fs::metadata(self.latest_pipe()).is_ok() {
+            fs::remove_file(self.latest_pipe()).expect("Failed to remove existing pipe");
+        }
+
+        // Create the FIFO
+        nix::unistd::mkfifo(
+            Path::new(&self.latest_pipe()),
+            nix::sys::stat::Mode::S_IRWXU,
+        )
+        .expect("Failed to create FIFO");
+
+        // Open the pipe for writing (this blocks until FFmpeg opens the read end)
+        let mut pipe = fs::OpenOptions::new()
+            .write(true)
+            .open(self.latest_pipe())
+            .expect("Failed to open pipe");
+
+        loop {
+            let output = Command::new("convert")
+                .arg(self.latest())
+                .arg("-resize")
+                .arg("1920x1080!")
+                .arg("rgb:-")
+                .stdout(Stdio::piped())
+                .output()
+                .expect("Failed to run convert");
+
+            pipe.write_all(&output.stdout)
+                .expect("Failed to write to pipe");
+
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        Ok(())
+    } */
 
     /* pub fn create_playback(&self) -> Result<()> {
         // Remove the file if it already exists
@@ -371,10 +415,23 @@ impl FileManager {
             // .args(["-fflags", "+genpts+nobuffer"])
             // .args(["-fflags", "+discardcorrupt"])
             .args(["-use_wallclock_as_timestamps", "1"])
+            // .args(["-thread_queue_size", "4"])
             .format("v4l2")
             .input(&input)
-            .args(["-loop", "1"])
-            .input(&self.latest())
+            // .args(["-loop", "1"])
+            // .args(["-use_wallclock_as_timestamps", "1"])
+            // .input(&self.latest())
+            .args([
+                "-f",
+                "rawvideo",
+                "-framerate",
+                "1",
+                "-video_size",
+                "1920x1080",
+                "-pixel_format",
+                "rgb24",
+            ])
+            .input("/tmp/latest-pipe")
             // .args(["-loop", "1"])
             // .input(&self.snapshot())
             // .args(["-loop", "1"])
@@ -386,8 +443,8 @@ impl FileManager {
             .codec_video("libx264")
             .preset("ultrafast")
             .args(["-tune", "zerolatency"])
-            .args(["-g", "1"])
-            .args(["-bf", "0"])
+            // .args(["-g", "1"])
+            // .args(["-bf", "0"])
             // .args(["-fflags", "+genpts+nobuffer"])
             // .args(["-fflags", "nobuffer"])
             .args(["-flush_packets", "1"])

@@ -5,7 +5,6 @@ use ffmpeg_sidecar::{
     event::{FfmpegEvent, LogLevel},
 };
 use inquire::Select;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -17,6 +16,7 @@ use std::{
     os::unix::fs::FileTypeExt,
     path::{Path, PathBuf},
 };
+use std::{process::Stdio, sync::Arc};
 use std::{
     process::{Child, Command},
     thread::sleep,
@@ -231,9 +231,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let output_path = file_manager.output_socket_file();
     let output_path = config.output.to_string();
     let tmpdir = file_manager.tmp.clone();
+    let latest = file_manager.latest().clone();
+
+    // // Remove existing pipe if it exists
+    //
+    // if fs::metadata(file_manager.latest_pipe()).is_ok() {
+    //     fs::remove_file(file_manager.latest_pipe()).expect("Failed to remove existing pipe");
+    // }
+    //
+    // // Create the FIFO
+    // nix::unistd::mkfifo(
+    //     Path::new(&file_manager.latest_pipe()),
+    //     nix::sys::stat::Mode::S_IRWXU,
+    // )
+    // .expect("Failed to create FIFO");
+    // Command::new("mkfifo")
+    //     .arg(&file_manager.latest_pipe())
+    //     .output()?;
+    //
+    // //
+    // // Open the pipe for writing (this blocks until FFmpeg opens the read end)
+    // let mut pipe = fs::OpenOptions::new()
+    //     .write(true)
+    //     .open(file_manager.latest_pipe())
+    //     .expect("Failed to open pipe");
+    //
+    let mut ffplay_pid: Option<u32> = None;
+    // thread::spawn(move || {
+    //     loop {
+    //         let output = Command::new("convert")
+    //             .arg(&latest)
+    //             .arg("-resize")
+    //             .arg("1920x1080!")
+    //             .arg("rgb:-")
+    //             .stdout(Stdio::piped())
+    //             .output()
+    //             .expect("Failed to run convert");
+    //
+    //         pipe.write_all(&output.stdout)
+    //             .expect("Failed to write to pipe");
+    //
+    //         std::thread::sleep(Duration::from_secs(1));
+    //     }
+    // });
 
     thread::spawn(move || {
-        let mut ffplay_pid: Option<u32> = None;
         loop {
             // println!("loop repeats");
             // File::create(&Path::new(NOTIFICATION_FILE)).expect("clear notification");
@@ -279,7 +321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("error occurred spawning ffplay");
                             }
                         } else {
-                            println!("Received Stop message");
+                            println!("Received Start message");
                             if let Some(pid) = ffplay_pid {
                                 Command::new("kill")
                                     .args(["-9", &pid.to_string()])
@@ -310,6 +352,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    thread::sleep(Duration::from_secs(3));
+
     // let mut ffplay = Command::new("vlc")
     //     .arg(format!("v4l2://{}", &config.output.path()))
     //     .spawn()?;
@@ -318,6 +362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     println!("waiting for preview file to be generated");
     //     sleep(Duration::from_millis(333));
     // }
+    // mkfifo
 
     // thread::sleep(Duration::from_secs(5));
     // // Start the streaming loop

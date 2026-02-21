@@ -24,13 +24,14 @@ impl JustEffects {
                 "[0:v]{}[cam]",
                 [
                     "scale=1920:1080",
+                    "setpts=N/FRAME_RATE/TB",
                     if self.vflip { "vflip" } else { "null" },
                     if self.hflip { "hflip" } else { "null" }
                 ]
                 .join(",")
             ),
             // Latest
-            "[1:v]scale=1920:1080[latest]",
+            "[1:v]scale=1920:1080,setpts=N/FRAME_RATE/TB[latest]",
             // // Preview
             // "[2:v]scale=1920:1080[preview]",
             // Split cam into snapshot and stream
@@ -58,8 +59,12 @@ impl JustEffects {
                 format!("[stream2]{}[stream_thumb]", thumb_filter),
                 format!("[latest2]{}[latest_thumb]", thumb_filter),
                 // Onion skin
+                // format!(
+                //     "[stream1][latest1]blend=all_mode=normal:all_opacity={}[mux]",
+                //     self.onion_opacity
+                // ),
                 format!(
-                    "[stream1][latest1]blend=all_mode=normal:all_opacity={}[mux]",
+                    "[stream1][latest1]mix=inputs=2:weights=1 {}:scale=1[mux]",
                     self.onion_opacity
                 ),
                 // // Preview
@@ -77,7 +82,7 @@ impl JustEffects {
                 self.photo_graph(),
                 // Onion skin
                 format!(
-                    "[stream][latest]blend=all_mode=normal:all_opacity={}[mux]",
+                    "[stream1][latest1]mix=inputs=2:weights=1 {}:scale=1[mux]",
                     self.onion_opacity
                 ),
                 // // Preview
