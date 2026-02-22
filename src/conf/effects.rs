@@ -31,7 +31,8 @@ impl JustEffects {
                 .join(",")
             ),
             // Latest
-            "[1:v]scale=1920:1080,setpts=N/FRAME_RATE/TB[latest]",
+            // "[1:v]scale=1920:1080,setpts=N/FRAME_RATE/TB[latest]",
+            "[1:v]scale=1920:1080[latest]",
             // // Preview
             // "[2:v]scale=1920:1080[preview]",
             // Split cam into snapshot and stream

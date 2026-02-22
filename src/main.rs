@@ -292,6 +292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             //     println!("waiting");
                             //     sleep(Duration::from_millis(333));
                             // }
+                            thread::sleep(Duration::from_secs(3));
 
                             // FFplay from the output socket
                             // ffplay -f rawvideo -pixel_format yuv420p -video_size 1920x1080 -framerate 60 /tmp/output.pipe
@@ -300,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .args(["-fflags", "nobuffer"])
                                 .args(["-flags", "low_delay"])
                                 .arg("-framedrop")
-                                .args(["-probesize", "32"])
+                                // .args(["-probesize", "32"])
                                 .args(["-analyzeduration", "0"])
                                 // .args(["-f", "rawvideo"])
                                 //
