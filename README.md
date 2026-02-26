@@ -1,3 +1,31 @@
+
+ffmpeg -i /dev/video3 -preset ultrafast -tune zerolatency -codec libx264 -f mpegts udp://127.0.0.1:8090
+ffplay -fflags nobuffer -flags low_delay -framedrop udp://127.0.0.1:8090
+
+
+
+<!-- ffmpeg -i /dev/video3 -filter_complex "[0:v]split=2[out1][out2]" -preset ultrafast -tune zerolatency -codec libx264 -f mpegts \ -->
+<!--     -map "[out1] "udp://127.0.0.1:8090" \ -->
+<!--     -map "[out2] "udp://127.0.0.1:8091" -->
+
+
+# Double port
+ffmpeg -i /dev/video3 \
+  -c:v libx264 -preset ultrafast -tune zerolatency -g 30 -x264-params "repeat-headers=1:bframes=0" \
+  -map 0 \
+  -f tee "[f=mpegts]udp://127.0.0.1:8090|[f=mpegts]udp://127.0.0.1:8091"
+
+
+# Literal jesus christ
+ffmpeg -i /dev/video3 \
+  -map 0 -r 24 -c:v libx264 -preset ultrafast -tune zerolatency -g 24 -x264-params "repeat-headers=1:bframes=0" -f mpegts udp://127.0.0.1:8090 \
+  -map 0 -r 1 -update 1 snapshot.png
+
+ffmpeg -i /dev/video3 \
+  -filter_complex "[0:v]split=2[stream][snap]" \
+  -map "[stream]" -r 24 -c:v libx264 -preset ultrafast -tune zerolatency -g 24 -x264-params "repeat-headers=1:bframes=0" -f mpegts udp://127.0.0.1:8090 \
+  -map "[snap]" -r 1 -update 1 snapshot.png
+
 # Just Stop
 
 ![demo](https://github.com/user-attachments/assets/22856278-0534-4d5c-a87a-ca52aefce01d)

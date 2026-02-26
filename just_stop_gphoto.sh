@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 set -uo pipefail
 
 TMPDIR="/tmp/just_stop"
@@ -7,31 +7,30 @@ TRIGGER_DELETION="$TMPDIR/delete.trigger"
 TRIGGER_PLAYBACK="$TMPDIR/playback.trigger"
 PLAYBACK_FILE="$TMPDIR/playback.mp4"
 NOTIFICATION_FILE="$TMPDIR/notification.txt"
+STREAM_FILE="$TMPDIR/stream"
 
 # FFMPEG needs this arg in complex filters to work
+# CAMERA_FORMAT="scale=iw:ih"
 CAMERA_FORMAT="format=yuv420p"
 
-# real devices
-# devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=0))
 # virtual devices
-# virtual_devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=1))
+virtual_devices=($(v4l2-ctl --list-devices | ./cameras.awk -v virtual=1))
 
-# if [[ ${#devices[@]} -eq 0 ]]; then
-#   echo "There are no webcams available"
-#   exit 1
-# fi
-#
-# if [[ ${#virtual_devices[@]} -eq 0 ]]; then
-#   echo "There are no virtual cameras available"
-#   exit 1
-# fi
+gphoto2 --abilities 2>/dev/null >/dev/null
+if [ $? -ne 0 ]; then
+  echo "There are no DSLRs available"
+  exit 1
+fi
+
+if [[ ${#virtual_devices[@]} -eq 0 ]]; then
+  echo "There are no virtual cameras available"
+  exit 1
+fi
 
 # Virtual device
-device_v="/dev/video10"
-
-# "${virtual_devices[0]}"
+device_v="${virtual_devices[0]}"
 # Webcam device
-device_w="/dev/video3"
+# device_w="${devices[0]}"
 
 # Grid rows
 grid_r=0
@@ -67,10 +66,10 @@ if [[ ! -v 1 ]]; then
   usage
 fi
 
-while getopts ":v:w:r:c:d:g:o:p:C:ah" o; do
+while getopts ":v:r:c:d:g:o:p:C:ah" o; do
   opt_prefix=
   case $o in
-  w | v)
+  v)
     opt_prefix="device"
     ;;&
   r | c | g | C)
@@ -88,31 +87,18 @@ while getopts ":v:w:r:c:d:g:o:p:C:ah" o; do
       exit 1
     fi
     ;;&
-  w)
-    selected_wcam="/dev/video$OPTARG"
-    # if [[ " ${devices[@]} " =~ " $selected_wcam " ]]; then
-    echo "$selected_wcam is a valid webcam"
-    declare OPTARG=$selected_wcam
-    # else
-    #   echo "$selected_wcam isn't a valid webcam." >&2
-    #   echo -e "\nValid webcams: ${devices[@]}"
-    #   exit 1
-    # fi
-    ;;&
   v)
     selected_vcam="/dev/video$OPTARG"
-    # if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
-    echo "$selected_vcam is a valid virtual device"
-    vcam_fps=$(v4l2-ctl -d "$selected_vcam" -P 2>/dev/null | perl -n -e'/(\d+)\// && print $1')
-    # Default to 30 fps if we can't detect it (common for v4l2loopback)
-    : ${vcam_fps:=30}
-    echo "vcam_fps: $vcam_fps"
-    declare OPTARG=$selected_vcam
-    # else
-    #   echo "$selected_wcam isn't a valid virtual device." >&2
-    #   echo -e "\nValid virtual devices: ${virtual_devices[@]}"
-    #   exit 1
-    # fi
+    if [[ " ${virtual_devices[@]} " =~ " $selected_vcam " ]]; then
+      echo "$selected_vcam is a valid virtual device"
+      vcam_fps=$(v4l2-ctl -d2 -P | perl -n -e'/(\d+)\// && print $1')
+      echo "vcam_fps: $vcam_fps"
+      declare OPTARG=$selected_vcam
+    else
+      echo "$selected_wcam isn't a valid virtual device." >&2
+      echo -e "\nValid virtual devices: ${virtual_devices[@]}"
+      exit 1
+    fi
     ;;&
   # Zero to one hundred values
   r | c | g | o)
@@ -189,6 +175,23 @@ EOF
 done
 shift $((OPTIND - 1))
 
+# Add direction filter logic (same as preview)
+DIRECTION_FILTER=
+if [[ -n "$effect_d" ]]; then
+  case $effect_d in
+  h)
+    DIRECTION_FILTER="hflip"
+    ;;
+  v)
+    DIRECTION_FILTER="vflip"
+    ;;
+  b)
+    DIRECTION_FILTER="hflip,vflip"
+    ;;
+  esac
+fi
+: ${DIRECTION_FILTER:="null"}
+
 # Now that the vars have been shifted
 if [[ ! -v 1 ]]; then
   echo "Error: Directory was not specified" >&2
@@ -196,16 +199,16 @@ if [[ ! -v 1 ]]; then
 fi
 
 PHOTO_DIR="$1"
-SYMLINK="$PHOTO_DIR/latest.bmp"
-SNAPSHOT="$PHOTO_DIR/snapshot.bmp"
+LATEST="$PHOTO_DIR/latest.jpeg"
+THUMB_LATEST="$PHOTO_DIR/thumb_latest.jpeg"
 
-echo "Using webcam $device_w and virtual output $device_v"
+echo "Using DSLR and virtual output $device_v"
 
 # Create photo directory if it doesn't exist
 mkdir -p "$PHOTO_DIR"
 
 # If the dir is still there but this is the only process
-if [[ -d $TMPDIR && $(pgrep -c "just_stop.sh") -eq 1 ]]; then
+if [[ -d $TMPDIR && $(pgrep -c -f "just_stop_gphoto.sh") -eq 1 ]]; then
   echo "Previous instance failed to clean up properly. Removing tmp files."
   rm -rf $TMPDIR
 fi
@@ -241,21 +244,21 @@ wait_for_pid() {
 stop_preview() {
   # Stop streaming
   if [[ -n "$FFMPEG_PID" ]] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
-    echo "Killing stream..."
+    echo "Killing FFMPEG..."
     # Send interrupt signal to ffpmeg
     kill -INT "$FFMPEG_PID" 2>/dev/null || true
     # Wait for process to finish dying
     wait_for_pid "$FFMPEG_PID"
     # Reset pid
     FMPEG_PID=""
-    echo "Stream is dead."
+    echo "FFMPEG is dead."
   fi
 }
 
 link_latest() {
   # Store all matching files with timestamps
-  local file_list=$(find "$PHOTO_DIR" -name "*.bmp" -not -name "snapshot.bmp" -type f -printf '%T@ %p\n' 2>/dev/null)
-  file_c=$(find "$PHOTO_DIR" -name "*.bmp" -type f | wc -l)
+  local file_list=$(find "$PHOTO_DIR" -name "*.jpeg" -type f -printf '%T@ %p\n' 2>/dev/null)
+  file_c=$(find "$PHOTO_DIR" -name "*.jpeg" -type f | wc -l)
   # Count the number of matching files
   echo "file_c: ${file_c}"
   if [[ $file_c = 0 ]]; then
@@ -266,9 +269,9 @@ link_latest() {
     # Get the latest file path
     latest=$(echo "$file_list" | sort -nr | head -1 | cut -d' ' -f2-)
     echo "latest is $latest"
-    # Extract just the filename for the symlink target
-    local latest_basename=$(basename "$latest")
-    [[ -n "$latest" ]] && ln -sf "$latest_basename" "$SYMLINK"
+    if [[ -n "$latest" ]]; then
+      magick "$latest" -resize 1024x680\! "$LATEST"
+    fi
   fi
 }
 
@@ -276,7 +279,7 @@ delete() {
   echo "Deleting Photo..." >"$NOTIFICATION_FILE"
   stop_preview
 
-  local latest_referant=$(ls -l "$SYMLINK" | awk '/->/ {print $NF }')
+  local latest_referant=$(ls -l "$LATEST" | awk '/->/ {print $NF }')
   echo "Deleting $latest_referant"
   rm $latest_referant
 
@@ -289,32 +292,22 @@ delete() {
 capture() {
   echo "Capturing Photo..." >"$NOTIFICATION_FILE"
 
-  # stop_preview
+  stop_preview
 
   local timestamp=$(date +"%Y_%m_%d_%H_%M_%S")
-  local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.bmp"
+  local new_photo="$PHOTO_DIR/${file_p}_${file_c}_$timestamp.jpeg"
   echo "Capturing photo..."
-
-  if [[ ! -f $SNAPSHOT ]]; then
-    # Capture photo with error handling
-    if ffmpeg -f v4l2 -video_size 1920x1080 -i "$device_w" \
-      -vf "hflip,vflip" -frames:v 1 -framerate 5 -lossless 1 -y "$SNAPSHOT" 2>"$TMPDIR/error"; then
-      echo "Captured snapshot: $SNAPSHOT"
-    else
-      cat "$TMPDIR/error"
-      echo "Failed to capture photo, continuing..."
-    fi
+  # Capture photo with error handling
+  if gphoto2 --capture-image-and-download --filename "$new_photo"; then
+    echo "Captured: $new_photo"
+  else
+    echo "Failed to capture photo, continuing..."
   fi
 
-  if [[ ! -s $SNAPSHOT ]]; then
-    cp $new_photo $SNAPSHOT
-  fi
-
-  cp $SNAPSHOT $new_photo
-  echo "Captured: $new_photo"
+  sleep 0.3
 
   echo "Restarting preview..."
-  # preview
+  preview
 }
 
 playback() {
@@ -329,7 +322,8 @@ playback() {
 
   local filters=()
 
-  local main_fmt="scale=height=ih:width=iw,${CAMERA_FORMAT}"
+  local main_fmt="scale=width=1024:height=680,${DIRECTION_FILTER},${CAMERA_FORMAT}"
+
   # Render in the webcam's native fps so it gets played back right
   if [[ $advanced = true ]]; then
     filters=(
@@ -349,14 +343,16 @@ playback() {
   )
 
   # Render a preview
-  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.bmp" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" 2>/dev/null &
+  ffmpeg -framerate 12 -pattern_type glob -i "$PHOTO_DIR/$file_p*.jpeg" -filter_complex "$filter_complex" -map "[output]" -c:v libx264 "$PLAYBACK_FILE" 2>/dev/null &
 
   wait_for_pid $!
+  echo "FINISHED RENDER STARTING PLAYBACK"
 
   if [[ $? -eq 0 ]]; then
     stop_preview
 
-    ffmpeg -re -i "$PLAYBACK_FILE" -f v4l2 "$device_v" 2>/dev/null &
+    ffmpeg -re -i "$PLAYBACK_FILE" -r "$vcam_fps" -pix_fmt yuv420p -f v4l2 "$device_v" &
+
     wait_for_pid $!
 
     echo "Restarting preview..."
@@ -367,29 +363,21 @@ playback() {
   fi
 }
 
+capture_preview() {
+  echo "doing nothing "
+  # sudo gphoto2 --reset
+  # sleep 0.4s
+  # cd $TMPDIR
+  # timeout 3.3s sudo gphoto2 --capture-preview --force-overwrite
+}
+
 preview() {
+  # gphoto2 --reset 2>/dev/null || true
+
   link_latest
 
   # Clear the notification before previewing
   echo "" >"$NOTIFICATION_FILE"
-
-  local direction_filter=
-  if [[ -n "$effect_d" ]]; then
-    case $effect_d in
-    h)
-      echo "Video will be flipped horizontally."
-      direction_filter+="hflip"
-      ;;
-    v)
-      echo "Video will be flipped vertically."
-      direction_filter+="vflip"
-      ;;
-    b)
-      echo "Video will be flipped both vertically and horizontally."
-      direction_filter+="hflip,vflip"
-      ;;
-    esac
-  fi
 
   local grid_filter=
   if [[ $grid_r -gt 0 || $grid_c -gt 0 ]]; then
@@ -398,14 +386,13 @@ preview() {
   fi
 
   # Set to null if no settings were applied
-  : ${direction_filter:="null"}
   : ${grid_filter:="null"}
 
   local filters=()
 
   local main_fmt="${CAMERA_FORMAT}"
   local thumb_fmt="scale=width=iw/2:height=ih/2,${CAMERA_FORMAT}"
-  local webcam_filter="${direction_filter},${grid_filter}"
+  local webcam_filter="${DIRECTION_FILTER},${grid_filter}"
   local onion_filter="blend=all_mode=normal:all_opacity=${effect_o}"
   local file_count="drawtext=text='${file_p}_${file_c}':fontcolor=white:fontsize=30:box=1:boxcolor=black@${grid_g}"
   local notification_filter="drawtext=textfile=${NOTIFICATION_FILE}:reload=1:fontcolor=white:fontsize=100:box=1:boxcolor=black:x=(w-text_w)/2:y=(h-text_h)/2"
@@ -416,11 +403,11 @@ preview() {
     filters=(
       "[0:v]split=2[webcam][webcam_thumb]"
       "[1:v]split=2[latest][latest_thumb]"
-      "[webcam_thumb]${thumb_fmt},${direction_filter}[webcam_thumb_filtered]"
+      "[webcam_thumb]${thumb_fmt},${DIRECTION_FILTER}[webcam_thumb_filtered]"
       "[latest]${main_fmt}[overlay]"
       "[latest_thumb]${thumb_fmt}[latest_thumb_scaled]"
       "[webcam]${main_fmt},${webcam_filter}[webcam_filtered]"
-      "[webcam_filtered][overlay]${onion_filter}[blended];[blended]split=2[mux][snapshot]"
+      "[webcam_filtered][overlay]${onion_filter}[mux]"
       "[webcam_thumb_filtered][latest_thumb_scaled]vstack=inputs=2[left_stack]"
       "[mux]${text}[main]"
       "[left_stack][main]hstack=inputs=2[output]"
@@ -428,8 +415,8 @@ preview() {
   else
     filters=(
       "[0:v]${main_fmt},${webcam_filter}[webcam]"
-      "[1:v]${main_fmt}[latest]"
-      "[webcam][latest]${onion_filter}[blended];[blended]split=2[mux][snapshot]"
+      "[1:v]${main_fmt},${DIRECTION_FILTER}[latest]"
+      "[webcam][latest]${onion_filter}[mux]"
       "[mux]${text}[output]"
     )
   fi
@@ -440,25 +427,26 @@ preview() {
     echo "${filters[*]}"
   )
 
-  echo "filter:\n$filter_complex\n"
-
-  sleep 0.2
-
-  # Start virtual camera with overlay
-  ffmpeg -f v4l2 -video_size 1920x1080 -framerate 30 -i "$device_w" \
+  ffmpeg -f v4l2 -input_format mjpeg -video_size 1920x1080 -framerate 30 -i "/dev/video4" \
     -loop 1 -i $SYMLINK \
-    -filter_complex "$filter_complex" \
-    -map "[output]" -f mpegts "udp://127.0.0.1:8090" \
-    -map "[snapshot]" -r 1 -update 1 -y "$SNAPSHOT" &
+    -filter_complex "$filter_complex" -map "[output]" \
+    -f v4l2 "$device_v" 2>/dev/null &
 
+  # webcamize --stdout |
+  # ffmpeg -i  -i $LATEST \
+  #   -loop 1 \
+  #   -vcodec rawvideo \
+  #   -filter_complex "$filter_complex" -map "[output]" \
+  #   -f v4l2 "$device_v" 2>/dev/null &
+  #
+  # Check if process actually started
   FFMPEG_PID=$!
 
-  # Check if process actually started
-  echo "Started virtual webcam with PID $FFMPEG_PID"
+  echo "Started virtual webcam with ffmpeg PID $FFMPEG_PID"
 }
 
 # Create placeholder image if no photos exist
-if [[ ! "$(ls -A "$PHOTO_DIR"/*.bmp 2>/dev/null)" ]]; then
+if [[ ! "$(ls -A "$PHOTO_DIR"/*.jpeg 2>/dev/null)" ]]; then
   capture
 fi
 
@@ -466,10 +454,17 @@ fi
 trap cleanup SIGINT SIGTERM EXIT
 
 # Start preview
+capture_preview
+echo "starting preview"
 preview
+
+echo "starting main loop"
 
 # Main loop - check for trigger file
 while true; do
+  # Capture preview file
+  timeout 0.3s capture_preview
+
   # Handle triggers
   if [[ -f "$TRIGGER_CAPTURE" ]]; then
     rm -f "$TRIGGER_CAPTURE"
